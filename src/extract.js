@@ -150,6 +150,170 @@
     return (headingEl.parentElement?.innerText || "").trim() || null;
   }
 
+  function parseTransmission(text) {
+    if (!text) return null;
+    if (/automatic/i.test(text)) return "Automatic";
+    if (/automatica|automatico/i.test(text)) return "Automatic";
+    if (/\bmanual\b/i.test(text)) return "Manual";
+    if (/manual\b/i.test(text)) return "Manual";
+    if (/\bCVT\b/i.test(text)) return "CVT";
+    if (/dual[-\s]?clutch/i.test(text)) return "Dual-clutch";
+    if (/semi[-\s]?automatic/i.test(text)) return "Semi-automatic";
+    return null;
+  }
+
+  function parseDrivetrain(text) {
+    if (!text) return null;
+    const m = text.match(/\b(4x4|4wd|awd|fwd|rwd|2wd)\b/i);
+    if (!m) return null;
+    const v = m[1].toUpperCase();
+    if (v === "4WD") return "4WD";
+    if (v === "AWD") return "AWD";
+    if (v === "FWD") return "FWD";
+    if (v === "RWD") return "RWD";
+    if (v === "2WD") return "2WD";
+    if (v === "4X4") return "4x4";
+    return v;
+  }
+
+  function parseColors(text) {
+    if (!text) return {};
+    const out = {};
+    const ext = text.match(/Exterior\s+color:\s*([^·\n]+)(?:\s*·|\s*$)/i);
+    const intr = text.match(/Interior\s+color:\s*([^·\n]+)(?:\s*·|\s*$)/i);
+    if (ext) out.exterior_color = ext[1].trim();
+    if (intr) out.interior_color = intr[1].trim();
+    return out;
+  }
+
+  function parseNhtsaRating(text) {
+    if (!text) return null;
+    const m = text.match(/(\d(?:\.\d)?)\s*\/\s*5\s*overall\s*nhtsa/i);
+    return m ? Number(m[1]) : null;
+  }
+
+  function parseMpg(text) {
+    if (!text) return {};
+    const out = {};
+    const city = text.match(/(\d+(?:\.\d+)?)\s*MPG\s*city/i);
+    const highway = text.match(/(\d+(?:\.\d+)?)\s*MPG\s*highway/i);
+    const combined = text.match(/(\d+(?:\.\d+)?)\s*MPG\s*combined/i);
+    if (city) out.mpg_city = Number(city[1]);
+    if (highway) out.mpg_highway = Number(highway[1]);
+    if (combined) out.mpg_combined = Number(combined[1]);
+    return out;
+  }
+
+  function parseFuelType(text) {
+    if (!text) return null;
+    const m = text.match(/Fuel\s+type:\s*([A-Za-z][A-Za-z\s-]+)$/i);
+    if (m) return m[1].trim();
+    if (/\bgasoline\b/i.test(text)) return "Gasoline";
+    if (/\bgasolina\b/i.test(text)) return "Gasoline";
+    if (/\bdiesel\b/i.test(text)) return "Diesel";
+    if (/\bhybrid\b/i.test(text)) return "Hybrid";
+    if (/\bhibrid[oa]\b/i.test(text)) return "Hybrid";
+    if (/\belectric\b/i.test(text)) return "Electric";
+    if (/\belectrico\b/i.test(text)) return "Electric";
+    return null;
+  }
+
+  function parsePaidOff(text) {
+    if (!text) return null;
+    if (/not\s+paid\s+off/i.test(text)) return false;
+    if (/paid\s+off/i.test(text)) return true;
+    return null;
+  }
+
+  function parseVin(text) {
+    if (!text) return null;
+    const m = text.match(/\bVIN\b[:#]?\s*([A-HJ-NPR-Z0-9]{11,17})\b/i);
+    return m ? m[1] : null;
+  }
+
+  function parseTitleStatus(text) {
+    if (!text) return null;
+    if (/salvage|salvamento/i.test(text)) return "salvage";
+    if (/rebuilt|rebuild/i.test(text)) return "rebuilt";
+    if (/clean\s+title/i.test(text)) return "clean";
+    if (/lien/i.test(text)) return "lien";
+    return null;
+  }
+
+  function parseAboutVehicleText(text) {
+    const out = {
+      transmission: null,
+      drivetrain: null,
+      fuel_type: null,
+      exterior_color: null,
+      interior_color: null,
+      nhtsa_rating: null,
+      mpg_city: null,
+      mpg_highway: null,
+      mpg_combined: null,
+      paid_off: null,
+      about_items: []
+    };
+
+    if (!text) return out;
+
+    const lines = text
+      .split(/\n+/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+
+    for (const line of lines) {
+      if (line.length < 2) continue;
+
+      out.about_items.push(line);
+
+      if (!out.transmission) {
+        const t = parseTransmission(line);
+        if (t) out.transmission = t;
+      }
+
+      if (!out.drivetrain) {
+        const d = parseDrivetrain(line);
+        if (d) out.drivetrain = d;
+      }
+
+      if (!out.fuel_type) {
+        const f = parseFuelType(line);
+        if (f) out.fuel_type = f;
+      }
+
+      if (out.paid_off == null) {
+        const p = parsePaidOff(line);
+        if (p != null) out.paid_off = p;
+      }
+
+      if (!out.nhtsa_rating) {
+        const r = parseNhtsaRating(line);
+        if (r != null) out.nhtsa_rating = r;
+      }
+
+      if (!out.exterior_color || !out.interior_color) {
+        const c = parseColors(line);
+        if (c.exterior_color && !out.exterior_color) out.exterior_color = c.exterior_color;
+        if (c.interior_color && !out.interior_color) out.interior_color = c.interior_color;
+      }
+
+      const mpg = parseMpg(line);
+      if (mpg.mpg_city != null && out.mpg_city == null) out.mpg_city = mpg.mpg_city;
+      if (mpg.mpg_highway != null && out.mpg_highway == null) out.mpg_highway = mpg.mpg_highway;
+      if (mpg.mpg_combined != null && out.mpg_combined == null) out.mpg_combined = mpg.mpg_combined;
+    }
+
+    return out;
+  }
+
+  function normalizeSellerDescription(text) {
+    if (!text) return null;
+    const cleaned = text.replace(/\s+\n/g, "\n").trim();
+    if (!cleaned) return null;
+    return cleaned.length > 1400 ? `${cleaned.slice(0, 1400)}…` : cleaned;
+  }
+
   function findMileage() {
     const detailsText =
       findSectionTextByHeading(/^Details$/i) || findSectionTextByHeading(/^Vehicle\s+details$/i);
@@ -184,6 +348,24 @@
 
     const mileage = findMileage();
 
+    const aboutText = findSectionTextByHeading(/^About\s+this\s+vehicle$/i);
+    const about = parseAboutVehicleText(aboutText);
+
+    const sellerText =
+      findSectionTextByHeading(/^Seller'?s\s+description$/i) ||
+      findSectionTextByHeading(/^Description$/i);
+    const seller_description = normalizeSellerDescription(sellerText);
+
+    const vin = parseVin(sellerText);
+    const title_status = parseTitleStatus(sellerText);
+
+    const descDrivetrain = about.drivetrain || parseDrivetrain(sellerText);
+    const descTransmission = about.transmission || parseTransmission(sellerText);
+    const descFuel = about.fuel_type || parseFuelType(sellerText);
+    const descColors = parseColors(sellerText);
+    const descMpg = parseMpg(sellerText);
+    const descNhtsa = about.nhtsa_rating || parseNhtsaRating(sellerText);
+
     return {
       url: location.href,
       source_text: raw || null,
@@ -194,7 +376,21 @@
       price_text: price_text || null,
       price_usd: price_usd != null ? price_usd : null,
       mileage_text: mileage.mileage_text,
-      mileage_miles: mileage.mileage_miles
+      mileage_miles: mileage.mileage_miles,
+      transmission: descTransmission || null,
+      drivetrain: descDrivetrain || null,
+      fuel_type: descFuel || null,
+      exterior_color: about.exterior_color || descColors.exterior_color || null,
+      interior_color: about.interior_color || descColors.interior_color || null,
+      mpg_city: about.mpg_city ?? descMpg.mpg_city ?? null,
+      mpg_highway: about.mpg_highway ?? descMpg.mpg_highway ?? null,
+      mpg_combined: about.mpg_combined ?? descMpg.mpg_combined ?? null,
+      nhtsa_rating: descNhtsa ?? null,
+      paid_off: about.paid_off ?? null,
+      title_status: title_status || null,
+      vin: vin || null,
+      seller_description: seller_description || null,
+      about_items: about.about_items || []
     };
   };
 })();

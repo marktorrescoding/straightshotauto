@@ -113,6 +113,60 @@
 
           <div class="fbco-divider"></div>
 
+          <div class="fbco-section-title">Details</div>
+
+          <div class="fbco-row">
+            <div class="fbco-label">Transmission</div>
+            <div class="fbco-val"><span id="fbco-transmission" class="fbco-value">(not found)</span></div>
+          </div>
+
+          <div class="fbco-row">
+            <div class="fbco-label">Drivetrain</div>
+            <div class="fbco-val"><span id="fbco-drivetrain" class="fbco-value">(not found)</span></div>
+          </div>
+
+          <div class="fbco-row">
+            <div class="fbco-label">Fuel</div>
+            <div class="fbco-val"><span id="fbco-fuel" class="fbco-value">(not found)</span></div>
+          </div>
+
+          <div class="fbco-row">
+            <div class="fbco-label">Colors</div>
+            <div class="fbco-val"><span id="fbco-colors" class="fbco-value">(not found)</span></div>
+          </div>
+
+          <div class="fbco-row">
+            <div class="fbco-label">MPG</div>
+            <div class="fbco-val"><span id="fbco-mpg" class="fbco-value">(not found)</span></div>
+          </div>
+
+          <div class="fbco-row">
+            <div class="fbco-label">NHTSA</div>
+            <div class="fbco-val"><span id="fbco-nhtsa" class="fbco-value">(not found)</span></div>
+          </div>
+
+          <div class="fbco-row">
+            <div class="fbco-label">Title</div>
+            <div class="fbco-val"><span id="fbco-title-status" class="fbco-value">(not found)</span></div>
+          </div>
+
+          <div class="fbco-row">
+            <div class="fbco-label">Paid off</div>
+            <div class="fbco-val"><span id="fbco-paid-off" class="fbco-value">(not found)</span></div>
+          </div>
+
+          <div class="fbco-row">
+            <div class="fbco-label">VIN</div>
+            <div class="fbco-val"><span id="fbco-vin" class="fbco-value">(not found)</span></div>
+          </div>
+
+          <div class="fbco-block">
+            <div class="fbco-label">Seller notes</div>
+            <div id="fbco-seller-notes" class="fbco-note">(not found)</div>
+          </div>
+
+          <div class="fbco-divider"></div>
+
           <div class="fbco-section-title">Analysis</div>
 
           <div class="fbco-row fbco-row-wide">
@@ -401,6 +455,16 @@
     const rawValEl = document.getElementById("fbco-raw-value");
     const priceValEl = document.getElementById("fbco-price-value");
     const mileageValEl = document.getElementById("fbco-mileage-value");
+    const transmissionEl = document.getElementById("fbco-transmission");
+    const drivetrainEl = document.getElementById("fbco-drivetrain");
+    const fuelEl = document.getElementById("fbco-fuel");
+    const colorsEl = document.getElementById("fbco-colors");
+    const mpgEl = document.getElementById("fbco-mpg");
+    const nhtsaEl = document.getElementById("fbco-nhtsa");
+    const titleEl = document.getElementById("fbco-title-status");
+    const paidOffEl = document.getElementById("fbco-paid-off");
+    const vinEl = document.getElementById("fbco-vin");
+    const sellerNotesEl = document.getElementById("fbco-seller-notes");
     const statusEl = document.getElementById("fbco-analysis-status");
     const summaryEl = document.getElementById("fbco-analysis-summary");
     const issuesEl = document.getElementById("fbco-analysis-issues");
@@ -413,6 +477,31 @@
     if (rawValEl) rawValEl.textContent = vehicle.source_text || "(not found)";
     if (priceValEl) priceValEl.textContent = window.FBCO_formatUSD(vehicle.price_usd) || "Not found";
     if (mileageValEl) mileageValEl.textContent = window.FBCO_formatMiles(vehicle.mileage_miles) || "Not found";
+    if (transmissionEl) transmissionEl.textContent = vehicle.transmission || "Not found";
+    if (drivetrainEl) drivetrainEl.textContent = vehicle.drivetrain || "Not found";
+    if (fuelEl) fuelEl.textContent = vehicle.fuel_type || "Not found";
+    if (colorsEl) {
+      const colors = [vehicle.exterior_color, vehicle.interior_color].filter(Boolean);
+      colorsEl.textContent = colors.length ? colors.join(" / ") : "Not found";
+    }
+    if (mpgEl) {
+      const mpgParts = [];
+      if (vehicle.mpg_city != null) mpgParts.push(`${vehicle.mpg_city} city`);
+      if (vehicle.mpg_highway != null) mpgParts.push(`${vehicle.mpg_highway} hwy`);
+      if (vehicle.mpg_combined != null) mpgParts.push(`${vehicle.mpg_combined} comb`);
+      mpgEl.textContent = mpgParts.length ? mpgParts.join(" · ") : "Not found";
+    }
+    if (nhtsaEl) nhtsaEl.textContent = vehicle.nhtsa_rating != null ? `${vehicle.nhtsa_rating}/5` : "Not found";
+    if (titleEl) titleEl.textContent = vehicle.title_status || "Not found";
+    if (paidOffEl) {
+      if (vehicle.paid_off == null) {
+        paidOffEl.textContent = "Not found";
+      } else {
+        paidOffEl.textContent = vehicle.paid_off ? "Yes" : "No";
+      }
+    }
+    if (vinEl) vinEl.textContent = vehicle.vin || "Not found";
+    if (sellerNotesEl) sellerNotesEl.textContent = vehicle.seller_description || "Not found";
 
     const loading = analysisState?.loading;
     const error = analysisState?.error;

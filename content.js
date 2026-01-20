@@ -11,7 +11,20 @@
       model: vehicle.model,
       price_usd: vehicle.price_usd,
       mileage_miles: vehicle.mileage_miles,
-      source_text: vehicle.source_text
+      source_text: vehicle.source_text,
+      transmission: vehicle.transmission,
+      drivetrain: vehicle.drivetrain,
+      fuel_type: vehicle.fuel_type,
+      exterior_color: vehicle.exterior_color,
+      interior_color: vehicle.interior_color,
+      mpg_city: vehicle.mpg_city,
+      mpg_highway: vehicle.mpg_highway,
+      mpg_combined: vehicle.mpg_combined,
+      nhtsa_rating: vehicle.nhtsa_rating,
+      paid_off: vehicle.paid_off,
+      title_status: vehicle.title_status,
+      vin: vehicle.vin,
+      seller_description: vehicle.seller_description
     });
   }
 
@@ -43,16 +56,30 @@
       const res = await fetch(API_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          url: vehicle.url,
-          source_text: vehicle.source_text,
-          year: vehicle.year,
-          make: vehicle.make,
-          model: vehicle.model,
-          price_usd: vehicle.price_usd,
-          mileage_miles: vehicle.mileage_miles
-        })
-      });
+      body: JSON.stringify({
+        url: vehicle.url,
+        source_text: vehicle.source_text,
+        year: vehicle.year,
+        make: vehicle.make,
+        model: vehicle.model,
+        price_usd: vehicle.price_usd,
+        mileage_miles: vehicle.mileage_miles,
+        transmission: vehicle.transmission,
+        drivetrain: vehicle.drivetrain,
+        fuel_type: vehicle.fuel_type,
+        exterior_color: vehicle.exterior_color,
+        interior_color: vehicle.interior_color,
+        mpg_city: vehicle.mpg_city,
+        mpg_highway: vehicle.mpg_highway,
+        mpg_combined: vehicle.mpg_combined,
+        nhtsa_rating: vehicle.nhtsa_rating,
+        paid_off: vehicle.paid_off,
+        title_status: vehicle.title_status,
+        vin: vehicle.vin,
+        seller_description: vehicle.seller_description,
+        about_items: vehicle.about_items
+      })
+    });
 
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
