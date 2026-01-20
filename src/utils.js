@@ -2,7 +2,12 @@
   // Shared state holder
   window.FBCO_STATE = {
     overlayId: "fb-car-overlay-mvp",
-    isUserSelecting: false
+    isUserSelecting: false,
+    analysisLoading: false,
+    analysisError: null,
+    lastAnalysis: null,
+    lastSnapshotKey: null,
+    analysisSeq: 0
   };
 
   window.FBCO_isVisible = function (el) {

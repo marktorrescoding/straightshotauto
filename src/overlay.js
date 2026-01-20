@@ -110,6 +110,45 @@
             <div class="fbco-label">Source</div>
             <div class="fbco-val"><span id="fbco-raw-value" class="fbco-value">(not found)</span></div>
           </div>
+
+          <div class="fbco-divider"></div>
+
+          <div class="fbco-section-title">Analysis</div>
+
+          <div class="fbco-row fbco-row-wide">
+            <div class="fbco-label">Status</div>
+            <div class="fbco-val"><span id="fbco-analysis-status" class="fbco-value">Waiting…</span></div>
+          </div>
+
+          <div class="fbco-row fbco-row-wide">
+            <div class="fbco-label">Summary</div>
+            <div class="fbco-val"><span id="fbco-analysis-summary" class="fbco-value">(none)</span></div>
+          </div>
+
+          <div class="fbco-block">
+            <div class="fbco-label">Common issues</div>
+            <ul id="fbco-analysis-issues" class="fbco-list"></ul>
+          </div>
+
+          <div class="fbco-block">
+            <div class="fbco-label">Upsides</div>
+            <ul id="fbco-analysis-upsides" class="fbco-list"></ul>
+          </div>
+
+          <div class="fbco-block">
+            <div class="fbco-label">Inspection checks</div>
+            <ul id="fbco-analysis-checklist" class="fbco-list"></ul>
+          </div>
+
+          <div class="fbco-block">
+            <div class="fbco-label">Price opinion</div>
+            <div id="fbco-analysis-price" class="fbco-value">(none)</div>
+          </div>
+
+          <div class="fbco-block">
+            <div class="fbco-label">Risk flags</div>
+            <ul id="fbco-analysis-risks" class="fbco-list"></ul>
+          </div>
         </div>
       </div>
 
@@ -178,7 +217,11 @@
 
       // Force a refresh of values immediately on restore
       const v = window.FBCO_extractVehicleSnapshot();
-      window.FBCO_updateOverlay(v);
+      window.FBCO_updateOverlay(v, {
+        loading: window.FBCO_STATE.analysisLoading,
+        error: window.FBCO_STATE.analysisError,
+        data: window.FBCO_STATE.lastAnalysis
+      });
     });
 
     // Drag: allow dragging in both modes (use header when open, icon when minimized)
@@ -314,7 +357,37 @@
     }, 600);
   }
 
-  window.FBCO_updateOverlay = function (vehicle) {
+  function stringifyIssue(issue) {
+    if (!issue) return null;
+    if (typeof issue === "string") return issue;
+    const parts = [];
+    if (issue.issue) parts.push(issue.issue);
+    if (issue.severity) parts.push(`Severity: ${issue.severity}`);
+    if (issue.estimated_cost) parts.push(`Cost: ${issue.estimated_cost}`);
+    if (issue.cost_range) parts.push(`Cost: ${issue.cost_range}`);
+    return parts.length ? parts.join(" • ") : null;
+  }
+
+  function renderList(el, items, mapFn) {
+    if (!el) return;
+    el.innerHTML = "";
+    if (!items || !items.length) {
+      const li = document.createElement("li");
+      li.className = "fbco-empty";
+      li.textContent = "Not available";
+      el.appendChild(li);
+      return;
+    }
+    items.forEach((item) => {
+      const text = mapFn ? mapFn(item) : typeof item === "string" ? item : JSON.stringify(item);
+      if (!text) return;
+      const li = document.createElement("li");
+      li.textContent = text;
+      el.appendChild(li);
+    });
+  }
+
+  window.FBCO_updateOverlay = function (vehicle, analysisState) {
     const root = ensureOverlay();
     if (!root) return;
 
@@ -328,10 +401,43 @@
     const rawValEl = document.getElementById("fbco-raw-value");
     const priceValEl = document.getElementById("fbco-price-value");
     const mileageValEl = document.getElementById("fbco-mileage-value");
+    const statusEl = document.getElementById("fbco-analysis-status");
+    const summaryEl = document.getElementById("fbco-analysis-summary");
+    const issuesEl = document.getElementById("fbco-analysis-issues");
+    const upsidesEl = document.getElementById("fbco-analysis-upsides");
+    const checklistEl = document.getElementById("fbco-analysis-checklist");
+    const priceEl = document.getElementById("fbco-analysis-price");
+    const risksEl = document.getElementById("fbco-analysis-risks");
 
     if (parsedValEl) parsedValEl.textContent = vehicle.normalized || "Not found";
     if (rawValEl) rawValEl.textContent = vehicle.source_text || "(not found)";
     if (priceValEl) priceValEl.textContent = window.FBCO_formatUSD(vehicle.price_usd) || "Not found";
     if (mileageValEl) mileageValEl.textContent = window.FBCO_formatMiles(vehicle.mileage_miles) || "Not found";
+
+    const loading = analysisState?.loading;
+    const error = analysisState?.error;
+    const data = analysisState?.data;
+
+    if (statusEl) {
+      if (!vehicle?.year || !vehicle?.make) {
+        statusEl.textContent = "Need year + make";
+      } else if (loading) {
+        statusEl.textContent = "Analyzing…";
+      } else if (error) {
+        statusEl.textContent = `Error: ${error}`;
+      } else if (data) {
+        statusEl.textContent = "Ready";
+      } else {
+        statusEl.textContent = "Waiting…";
+      }
+    }
+
+    if (summaryEl) summaryEl.textContent = data?.summary || "(none)";
+
+    renderList(issuesEl, data?.common_issues, stringifyIssue);
+    renderList(upsidesEl, data?.upsides);
+    renderList(checklistEl, data?.inspection_checklist);
+    renderList(risksEl, data?.risk_flags);
+    if (priceEl) priceEl.textContent = data?.price_opinion || "(none)";
   };
 })();

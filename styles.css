@@ -79,6 +79,10 @@
   margin-bottom: 10px;
 }
 
+#fb-car-overlay-mvp .fbco-row.fbco-row-wide {
+  grid-template-columns: 76px 1fr;
+}
+
 #fb-car-overlay-mvp .fbco-label {
   font-weight: 700;
   color: rgba(0,0,0,0.75);
@@ -97,6 +101,37 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+#fb-car-overlay-mvp .fbco-divider {
+  height: 1px;
+  background: rgba(0,0,0,0.08);
+  margin: 12px 0;
+}
+
+#fb-car-overlay-mvp .fbco-section-title {
+  font-size: 13px;
+  font-weight: 700;
+  margin: 0 0 10px;
+}
+
+#fb-car-overlay-mvp .fbco-block {
+  margin: 10px 0 12px;
+}
+
+#fb-car-overlay-mvp .fbco-list {
+  margin: 6px 0 0 0;
+  padding-left: 18px;
+}
+
+#fb-car-overlay-mvp .fbco-list li {
+  margin-bottom: 6px;
+  line-height: 1.3;
+}
+
+#fb-car-overlay-mvp .fbco-empty {
+  color: rgba(0,0,0,0.5);
+  font-style: italic;
 }
 
 /* --- Minimized mode --- */

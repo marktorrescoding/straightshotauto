@@ -1,5 +1,77 @@
 (() => {
   const UPDATE_DEBOUNCE_MS = 900;
+  const API_URL = "https://car-bot.car-bot.workers.dev/analyze";
+
+  function buildSnapshotKey(vehicle) {
+    if (!vehicle) return null;
+    return JSON.stringify({
+      url: vehicle.url,
+      year: vehicle.year,
+      make: vehicle.make,
+      model: vehicle.model,
+      price_usd: vehicle.price_usd,
+      mileage_miles: vehicle.mileage_miles,
+      source_text: vehicle.source_text
+    });
+  }
+
+  async function requestAnalysis(vehicle) {
+    const state = window.FBCO_STATE;
+    if (!vehicle) return;
+
+    const key = buildSnapshotKey(vehicle);
+    if (!key) return;
+
+    if (state.lastSnapshotKey === key && (state.analysisLoading || state.lastAnalysis || state.analysisError)) {
+      return;
+    }
+
+    state.lastSnapshotKey = key;
+    state.analysisLoading = true;
+    state.analysisError = null;
+    state.lastAnalysis = null;
+    state.analysisSeq += 1;
+    const seq = state.analysisSeq;
+
+    window.FBCO_updateOverlay(vehicle, {
+      loading: true,
+      error: null,
+      data: null
+    });
+
+    try {
+      const res = await fetch(API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          url: vehicle.url,
+          source_text: vehicle.source_text,
+          year: vehicle.year,
+          make: vehicle.make,
+          model: vehicle.model,
+          price_usd: vehicle.price_usd,
+          mileage_miles: vehicle.mileage_miles
+        })
+      });
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+
+      if (seq !== state.analysisSeq) return;
+      state.lastAnalysis = data;
+    } catch (err) {
+      if (seq !== state.analysisSeq) return;
+      state.analysisError = err?.message || "Request failed";
+    } finally {
+      if (seq !== state.analysisSeq) return;
+      state.analysisLoading = false;
+      window.FBCO_updateOverlay(vehicle, {
+        loading: state.analysisLoading,
+        error: state.analysisError,
+        data: state.lastAnalysis
+      });
+    }
+  }
 
   function runUpdate() {
     const state = window.FBCO_STATE;
@@ -12,7 +84,15 @@
     if (state.isUserSelecting) return;
 
     const vehicle = window.FBCO_extractVehicleSnapshot();
-    window.FBCO_updateOverlay(vehicle);
+    window.FBCO_updateOverlay(vehicle, {
+      loading: state.analysisLoading,
+      error: state.analysisError,
+      data: state.lastAnalysis
+    });
+
+    if (vehicle?.year && vehicle?.make) {
+      requestAnalysis(vehicle);
+    }
   }
 
   const scheduleUpdate = window.FBCO_debounce(runUpdate, UPDATE_DEBOUNCE_MS);
