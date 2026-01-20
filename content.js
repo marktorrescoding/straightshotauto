@@ -152,6 +152,52 @@
     }
   }
 
+  function insertMessage(text) {
+    const selectors = [
+      '[contenteditable="true"][role="textbox"][aria-label*="Message"]',
+      '[contenteditable="true"][role="textbox"][aria-label*="mensaje"]',
+      'textarea[aria-label*="Message"]',
+      'textarea[name="message"]',
+      '[contenteditable="true"][role="textbox"]',
+      'textarea',
+      '[contenteditable="true"]'
+    ];
+    const candidates = selectors
+      .flatMap((s) => Array.from(document.querySelectorAll(s)))
+      .filter((el) => !el.closest(`#${window.FBCO_STATE?.overlayId}`))
+      .filter((el) => (window.FBCO_isVisible ? window.FBCO_isVisible(el) : true));
+    const el = candidates[0];
+    if (!el) return false;
+
+    el.focus();
+
+    if (el.tagName === "TEXTAREA" || el.tagName === "INPUT") {
+      el.value = text;
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      return true;
+    }
+
+    try {
+      const selection = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      range.collapse(false);
+      selection.removeAllRanges();
+      selection.addRange(range);
+
+      el.textContent = text;
+      el.dispatchEvent(
+        new InputEvent("input", { bubbles: true, data: text, inputType: "insertText" })
+      );
+      return true;
+    } catch {
+      document.execCommand("insertText", false, text);
+      return true;
+    }
+  }
+
+  window.FBCO_insertMessage = insertMessage;
+
   const scheduleUpdate = window.FBCO_debounce(runUpdate, UPDATE_DEBOUNCE_MS);
 
   // Initial run

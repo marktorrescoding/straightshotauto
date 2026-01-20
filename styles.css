@@ -48,6 +48,15 @@
   font-size: 14px;
   font-weight: 700;
   letter-spacing: 0.2px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#fb-car-overlay-mvp .fbco-title-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
 }
 
 #fb-car-overlay-mvp .fbco-actions {
@@ -128,14 +137,23 @@
 #fb-car-overlay-mvp .fbco-section-title {
   font-size: 13px;
   font-weight: 700;
-  margin: 0 0 10px;
+  margin: 0;
 }
 
 #fb-car-overlay-mvp .fbco-section-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
+  gap: 8px;
   margin: 6px 0 10px;
+}
+
+#fb-car-overlay-mvp .fbco-section-header .fbco-link-btn {
+  order: 0;
+}
+
+#fb-car-overlay-mvp .fbco-section-header .fbco-section-title {
+  order: 1;
 }
 
 #fb-car-overlay-mvp .fbco-link-btn {
@@ -167,6 +185,36 @@
 #fb-car-overlay-mvp .fbco-list li {
   margin-bottom: 6px;
   line-height: 1.3;
+}
+
+#fb-car-overlay-mvp .fbco-list-pill {
+  list-style: none;
+  padding-left: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+#fb-car-overlay-mvp .fbco-list-pill li {
+  margin: 0;
+}
+
+#fb-car-overlay-mvp .fbco-btn-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(0,0,0,0.15);
+  background: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+#fb-car-overlay-mvp .fbco-btn-chip:hover {
+  border-color: rgba(0,0,0,0.3);
+  background: rgba(0,0,0,0.03);
 }
 
 #fb-car-overlay-mvp .fbco-spectrum {

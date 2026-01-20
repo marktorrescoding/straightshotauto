@@ -84,7 +84,10 @@
       <!-- Full panel -->
       <div class="fbco-panel" id="fbco-panel">
         <div class="fbco-header" id="fbco-drag-handle">
-          <div class="fbco-title">🦉 Car Spotter</div>
+          <div class="fbco-title">
+            <img id="fbco-title-icon" class="fbco-title-icon" alt="Car Spotter" />
+            <span>Car Spotter</span>
+          </div>
           <div class="fbco-actions">
             <button id="fbco-minimize" class="fbco-icon-btn" type="button" title="Minimize">–</button>
             <button id="fbco-close" class="fbco-icon-btn" type="button" title="Close">×</button>
@@ -139,7 +142,7 @@
 
           <div class="fbco-block">
             <div class="fbco-label">Buyer questions</div>
-            <ul id="fbco-analysis-questions" class="fbco-list"></ul>
+            <ul id="fbco-analysis-questions" class="fbco-list fbco-list-pill"></ul>
           </div>
 
           <div class="fbco-block">
@@ -160,8 +163,8 @@
           <div class="fbco-divider"></div>
 
           <div class="fbco-section-header">
-            <div class="fbco-section-title">Listing details</div>
             <button id="fbco-details-toggle" class="fbco-link-btn" type="button">Show</button>
+            <div class="fbco-section-title">Listing details</div>
           </div>
 
           <div id="fbco-details-section" class="fbco-collapsible" data-collapsed="1">
@@ -257,10 +260,25 @@
 
     document.body.appendChild(root);
 
+    const titleIcon = root.querySelector("#fbco-title-icon");
+    if (titleIcon && window.chrome?.runtime?.getURL) {
+      titleIcon.src = window.chrome.runtime.getURL("assets/icon48.png");
+    }
+
     // Only stop propagation for non-pointer events.
     // Pointer events are used for drag and must work reliably.
     ["click", "dblclick", "contextmenu", "keydown", "keyup"].forEach((evt) => {
       root.addEventListener(evt, (e) => e.stopPropagation(), false);
+    });
+
+    root.addEventListener("click", (e) => {
+      const target = e.target;
+      if (!target) return;
+      const btn = target.closest("[data-fbco-message]");
+      if (!btn) return;
+      const message = btn.dataset.fbcoMessage;
+      if (!message) return;
+      window.FBCO_insertMessage && window.FBCO_insertMessage(message);
     });
 
     // Selecting value pills pauses updates
@@ -476,7 +494,7 @@
     return parts.length ? parts.join(" • ") : null;
   }
 
-  function renderList(el, items, mapFn) {
+  function renderList(el, items, mapFn, opts) {
     if (!el) return;
     el.innerHTML = "";
     if (!items || !items.length) {
@@ -490,7 +508,16 @@
       const text = mapFn ? mapFn(item) : typeof item === "string" ? item : JSON.stringify(item);
       if (!text) return;
       const li = document.createElement("li");
-      li.textContent = text;
+      if (opts?.clickable) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "fbco-btn-chip";
+        btn.textContent = text;
+        btn.dataset.fbcoMessage = text;
+        li.appendChild(btn);
+      } else {
+        li.textContent = text;
+      }
       el.appendChild(li);
     });
   }
@@ -610,7 +637,7 @@
     renderList(issuesEl, data?.common_issues, stringifyIssue);
     renderList(upsidesEl, data?.upsides);
     renderList(checklistEl, data?.inspection_checklist);
-    renderList(questionsEl, data?.buyer_questions);
+    renderList(questionsEl, data?.buyer_questions, null, { clickable: true });
     renderList(risksEl, data?.risk_flags);
     renderTags(tagsEl, data?.tags);
     if (marketEl) marketEl.textContent = data?.market_value_estimate || "(estimate)";
