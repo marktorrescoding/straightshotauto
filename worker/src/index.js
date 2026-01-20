@@ -101,7 +101,9 @@ export default {
       make: payload?.make || null,
       model: payload?.model || null,
       price_usd: payload?.price_usd ?? null,
-      mileage_miles: payload?.mileage_miles ?? null
+      mileage_miles: payload?.mileage_miles ?? null,
+      seller_description: payload?.seller_description || null,
+      about_items: payload?.about_items || []
     };
 
     if (!snapshot.year || !snapshot.make) {

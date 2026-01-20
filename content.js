@@ -85,7 +85,8 @@
         title_status: vehicle.title_status,
         vin: vehicle.vin,
         seller_description: vehicle.seller_description,
-        about_items: vehicle.about_items
+        about_items: vehicle.about_items,
+        is_vehicle: vehicle.is_vehicle
       })
     });
 
@@ -154,6 +155,11 @@
         error: state.analysisError,
         data: state.lastAnalysis
       });
+    }
+
+    if (vehicle?.is_vehicle === false) {
+      window.FBCO_removeOverlay && window.FBCO_removeOverlay();
+      return;
     }
 
     if (vehicle?.year && vehicle?.make) {

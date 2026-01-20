@@ -6,8 +6,8 @@
   const STORE_KEY = "fbco.overlay.state.v6";
   const DEFAULT_STATE = {
     top: 16,
-    left: null,
-    right: 16,
+    left: 16,
+    right: null,
     width: 360,
     height: 200,
     minimized: false
@@ -54,7 +54,7 @@
     } else {
       root.style.width = `${state.width}px`;
       root.style.height = `${state.height}px`;
-      root.style.resize = "both";
+      root.style.resize = "none";
       root.style.overflow = "auto";
     }
   }
@@ -121,7 +121,6 @@
           </div>
 
           <div class="fbco-block">
-            <div class="fbco-label">Tags</div>
             <div id="fbco-analysis-tags" class="fbco-tags"></div>
           </div>
 
@@ -254,15 +253,21 @@
 
       <!-- Minimized icon -->
       <button class="fbco-mini" id="fbco-mini" type="button" title="Show car info" aria-label="Show car info">
-        <span class="fbco-mini-icon" aria-hidden="true">🚗</span>
+        <img id="fbco-mini-icon" class="fbco-mini-icon" alt="Car Spotter" />
       </button>
+
+      <!-- Resize handle (bottom-right) -->
+      <div class="fbco-resize-handle" id="fbco-resize-handle" title="Resize"></div>
     `;
 
     document.body.appendChild(root);
 
     const titleIcon = root.querySelector("#fbco-title-icon");
-    if (titleIcon && window.chrome?.runtime?.getURL) {
-      titleIcon.src = window.chrome.runtime.getURL("assets/icon48.png");
+    const miniIcon = root.querySelector("#fbco-mini-icon");
+    if (window.chrome?.runtime?.getURL) {
+      const iconUrl = window.chrome.runtime.getURL("assets/icon48.png");
+      if (titleIcon) titleIcon.src = iconUrl;
+      if (miniIcon) miniIcon.src = iconUrl;
     }
 
     // Only stop propagation for non-pointer events.
@@ -353,6 +358,8 @@
     // Drag: allow dragging in both modes (use header when open, icon when minimized)
     installPointerDrag(root);
 
+    // Custom resize handle (bottom-right)
+    installResizeHandle(root);
     // Persist resize only when not minimized
     installResizePersistence(root);
 
@@ -481,6 +488,59 @@
         applyOverlayState(root, st);
       }
     }, 600);
+  }
+
+  function installResizeHandle(root) {
+    const handle = root.querySelector("#fbco-resize-handle");
+    if (!handle) return;
+
+    let resizing = false;
+    let startX = 0;
+    let startY = 0;
+    let startW = 0;
+    let startH = 0;
+
+    function onPointerDown(e) {
+      if (e.button !== 0) return;
+      if (loadOverlayState().minimized) return;
+      resizing = true;
+      const rect = root.getBoundingClientRect();
+      startW = rect.width;
+      startH = rect.height;
+      startX = e.clientX;
+      startY = e.clientY;
+      handle.setPointerCapture(e.pointerId);
+      document.body.style.userSelect = "none";
+    }
+
+    function onPointerMove(e) {
+      if (!resizing) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+
+      const w = Math.max(MIN_W, Math.round(startW + dx));
+      const h = Math.max(MIN_H, Math.round(startH + dy));
+
+      const st = loadOverlayState();
+      st.width = w;
+      st.height = h;
+      saveOverlayState(st);
+      applyOverlayState(root, st);
+    }
+
+    function endResize(e) {
+      if (!resizing) return;
+      resizing = false;
+      try {
+        handle.releasePointerCapture(e.pointerId);
+      } catch {}
+      document.body.style.userSelect = "";
+    }
+
+    handle.addEventListener("pointerdown", onPointerDown);
+    handle.addEventListener("pointermove", onPointerMove);
+    handle.addEventListener("pointerup", endResize);
+    handle.addEventListener("pointercancel", endResize);
   }
 
   function stringifyIssue(issue) {

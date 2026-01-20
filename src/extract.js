@@ -175,6 +175,48 @@
     return (headingEl.parentElement?.innerText || "").trim() || null;
   }
 
+  function getSelectedCategoryLabel() {
+    const selectors = [
+      '[aria-current="page"]',
+      '[aria-current="true"]',
+      '[aria-selected="true"]',
+      '[role="option"][aria-selected="true"]'
+    ];
+    const els = selectors.flatMap((s) => Array.from(document.querySelectorAll(s)));
+    for (const el of els) {
+      if (!window.FBCO_isVisible(el)) continue;
+      const t = (el.innerText || "").trim();
+      if (t && t.length <= 40) return t;
+    }
+    return null;
+  }
+
+  function isVehicleCategory(label) {
+    if (!label) return false;
+    return (
+      /^Vehicles$/i.test(label) ||
+      /^Cars\s*&\s*Trucks$/i.test(label) ||
+      /^Vehicle$/i.test(label)
+    );
+  }
+
+  function hasVehicleSignals() {
+    const headings = Array.from(document.querySelectorAll("span, div, h1, h2, h3"))
+      .filter(window.FBCO_isVisible)
+      .slice(0, 2500);
+
+    return headings.some((el) => {
+      const t = (el.innerText || "").trim();
+      if (!t) return false;
+      return (
+        /^About\s+this\s+vehicle$/i.test(t) ||
+        /^Vehicle\s+details$/i.test(t) ||
+        /^Vehicle$/i.test(t) ||
+        /^Cars\s*&\s*Trucks$/i.test(t)
+      );
+    });
+  }
+
   function parseTransmission(text) {
     if (!text) return null;
     if (/automatic/i.test(text)) return "Automatic";
@@ -391,6 +433,10 @@
     const descMpg = parseMpg(sellerText);
     const descNhtsa = about.nhtsa_rating || parseNhtsaRating(sellerText);
 
+    const selectedCategory = getSelectedCategoryLabel();
+    const categoryIsVehicle = selectedCategory ? isVehicleCategory(selectedCategory) : null;
+    const signalVehicle = hasVehicleSignals();
+
     return {
       url: location.href,
       source_text: raw || null,
@@ -402,6 +448,7 @@
       price_usd: price_usd != null ? price_usd : null,
       mileage_text: mileage.mileage_text,
       mileage_miles: mileage.mileage_miles,
+      is_vehicle: categoryIsVehicle === null ? signalVehicle : categoryIsVehicle,
       transmission: descTransmission || null,
       drivetrain: descDrivetrain || null,
       fuel_type: descFuel || null,
