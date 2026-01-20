@@ -25,5 +25,4 @@ Your Choices
 You can disable or uninstall the extension at any time. The extension runs only on Facebook
 Marketplace item pages.
 
-Contact
-If you have questions, contact us at: your-email@example.com
+
