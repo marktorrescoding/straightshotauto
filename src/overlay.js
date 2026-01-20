@@ -54,7 +54,7 @@
     } else {
       root.style.width = `${state.width}px`;
       root.style.height = `${state.height}px`;
-      root.style.resize = "none";
+      root.style.resize = "both";
       root.style.overflow = "auto";
     }
   }
@@ -257,9 +257,6 @@
       <button class="fbco-mini" id="fbco-mini" type="button" title="Show car info" aria-label="Show car info">
         <img id="fbco-mini-icon" class="fbco-mini-icon" alt="Car Spotter" />
       </button>
-
-      <!-- Resize handle (bottom-right) -->
-      <div class="fbco-resize-handle" id="fbco-resize-handle" title="Resize"></div>
     `;
 
     document.body.appendChild(root);
@@ -367,8 +364,6 @@
     // Drag: allow dragging in both modes (use header when open, icon when minimized)
     installPointerDrag(root);
 
-    // Custom resize handle (bottom-right)
-    installResizeHandle(root);
     // Persist resize only when not minimized
     installResizePersistence(root);
 
@@ -499,58 +494,6 @@
     }, 600);
   }
 
-  function installResizeHandle(root) {
-    const handle = root.querySelector("#fbco-resize-handle");
-    if (!handle) return;
-
-    let resizing = false;
-    let startX = 0;
-    let startY = 0;
-    let startW = 0;
-    let startH = 0;
-
-    function onPointerDown(e) {
-      if (e.button !== 0) return;
-      if (loadOverlayState().minimized) return;
-      resizing = true;
-      const rect = root.getBoundingClientRect();
-      startW = rect.width;
-      startH = rect.height;
-      startX = e.clientX;
-      startY = e.clientY;
-      handle.setPointerCapture(e.pointerId);
-      document.body.style.userSelect = "none";
-    }
-
-    function onPointerMove(e) {
-      if (!resizing) return;
-      const dx = e.clientX - startX;
-      const dy = e.clientY - startY;
-
-      const w = Math.max(MIN_W, Math.round(startW + dx));
-      const h = Math.max(MIN_H, Math.round(startH + dy));
-
-      const st = loadOverlayState();
-      st.width = w;
-      st.height = h;
-      saveOverlayState(st);
-      applyOverlayState(root, st);
-    }
-
-    function endResize(e) {
-      if (!resizing) return;
-      resizing = false;
-      try {
-        handle.releasePointerCapture(e.pointerId);
-      } catch {}
-      document.body.style.userSelect = "";
-    }
-
-    handle.addEventListener("pointerdown", onPointerDown);
-    handle.addEventListener("pointermove", onPointerMove);
-    handle.addEventListener("pointerup", endResize);
-    handle.addEventListener("pointercancel", endResize);
-  }
 
   function stringifyIssue(issue) {
     if (!issue) return null;
@@ -720,7 +663,7 @@
         const name = [vehicle.year, vehicle.make, vehicle.model].filter(Boolean).join(" ");
         const price = vehicle.price_usd ? window.FBCO_formatUSD(vehicle.price_usd) : null;
         const miles = vehicle.mileage_miles ? window.FBCO_formatMiles(vehicle.mileage_miles) : null;
-        const extras = [price, miles].filter(Boolean).join(" / ");
+        const extras = [price, miles].filter(Boolean).join(" • ");
         vehicleTitleEl.textContent = extras ? `${name} (${extras})` : name;
       } else {
         vehicleTitleEl.textContent = "—";
