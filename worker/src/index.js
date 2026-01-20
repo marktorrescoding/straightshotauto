@@ -157,6 +157,7 @@ export default {
       "upsides (array of strings),",
       "inspection_checklist (array of strings),",
       "buyer_questions (array of strings),",
+      "market_value_estimate (string, e.g. \"$18,000–$21,000\"),",
       "price_opinion (string),",
       "overall_score (number 0-100),",
       "risk_flags (array of strings),",

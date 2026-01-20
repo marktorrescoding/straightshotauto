@@ -92,6 +92,22 @@
         </div>
 
         <div class="fbco-body" id="fbco-body">
+          <div class="fbco-spectrum fbco-spectrum-top">
+            <div class="fbco-spectrum-label">Overall rating</div>
+            <div class="fbco-spectrum-bar">
+              <div id="fbco-spectrum-marker" class="fbco-spectrum-marker"></div>
+            </div>
+            <div class="fbco-spectrum-scale">
+              <span>❌ No</span>
+              <span>⚠️ Risky</span>
+              <span>⚖️ Fair</span>
+              <span>👍 Good</span>
+              <span>💎 Great</span>
+              <span>🚀 Steal</span>
+            </div>
+            <div id="fbco-score-value" class="fbco-score-value">--</div>
+          </div>
+
           <div class="fbco-row">
             <div class="fbco-label">Parsed</div>
             <div class="fbco-val"><span id="fbco-parsed-value" class="fbco-value">Detecting…</span></div>
@@ -170,22 +186,6 @@
 
           <div class="fbco-section-title">Analysis</div>
 
-          <div class="fbco-spectrum">
-            <div class="fbco-spectrum-label">Overall rating</div>
-            <div class="fbco-spectrum-bar">
-              <div id="fbco-spectrum-marker" class="fbco-spectrum-marker"></div>
-            </div>
-            <div class="fbco-spectrum-scale">
-              <span>❌ No</span>
-              <span>⚠️ Risky</span>
-              <span>⚖️ Fair</span>
-              <span>👍 Good</span>
-              <span>💎 Great</span>
-              <span>🚀 Steal</span>
-            </div>
-            <div id="fbco-score-value" class="fbco-score-value">--</div>
-          </div>
-
           <div class="fbco-row fbco-row-wide">
             <div class="fbco-label">Status</div>
             <div class="fbco-val">
@@ -222,6 +222,11 @@
           <div class="fbco-block">
             <div class="fbco-label">Buyer questions</div>
             <ul id="fbco-analysis-questions" class="fbco-list"></ul>
+          </div>
+
+          <div class="fbco-block">
+            <div class="fbco-label">Market value</div>
+            <div id="fbco-analysis-market" class="fbco-value">(estimate)</div>
           </div>
 
           <div class="fbco-block">
@@ -552,6 +557,7 @@
     const scoreValEl = document.getElementById("fbco-score-value");
     const scoreMarkerEl = document.getElementById("fbco-spectrum-marker");
     const tagsEl = document.getElementById("fbco-analysis-tags");
+    const marketEl = document.getElementById("fbco-analysis-market");
 
     if (parsedValEl) parsedValEl.textContent = vehicle.normalized || "Not found";
     if (rawValEl) rawValEl.textContent = vehicle.source_text || "(not found)";
@@ -612,6 +618,7 @@
     renderList(questionsEl, data?.buyer_questions);
     renderList(risksEl, data?.risk_flags);
     renderTags(tagsEl, data?.tags);
+    if (marketEl) marketEl.textContent = data?.market_value_estimate || "(estimate)";
     if (priceEl) priceEl.textContent = data?.price_opinion || "(none)";
 
     if (scoreValEl && scoreMarkerEl) {
