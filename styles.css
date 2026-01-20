@@ -67,13 +67,24 @@
   font-size: 16px;
 }
 
-#fb-car-overlay-mvp[data-loading="1"] #fbco-reload {
-  animation: fbco-spin 1.1s linear infinite;
-}
-
 #fb-car-overlay-mvp .fbco-body {
   padding: 12px 12px 14px;
   font-size: 13px;
+}
+
+#fb-car-overlay-mvp .fbco-summary {
+  font-weight: 700;
+  font-size: 13px;
+  margin: 2px 0 8px;
+  color: rgba(0,0,0,0.82);
+}
+
+#fb-car-overlay-mvp .fbco-vehicle-title {
+  font-weight: 700;
+  font-size: 14px;
+  margin: 0 0 6px;
+  letter-spacing: 0.2px;
+  color: rgba(0,0,0,0.9);
 }
 
 #fb-car-overlay-mvp .fbco-row {
@@ -118,6 +129,30 @@
   font-size: 13px;
   font-weight: 700;
   margin: 0 0 10px;
+}
+
+#fb-car-overlay-mvp .fbco-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 6px 0 10px;
+}
+
+#fb-car-overlay-mvp .fbco-link-btn {
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 12px;
+  color: rgba(0,0,0,0.6);
+  cursor: pointer;
+}
+
+#fb-car-overlay-mvp .fbco-link-btn:hover {
+  color: rgba(0,0,0,0.85);
+}
+
+#fb-car-overlay-mvp .fbco-collapsible[data-collapsed="1"] {
+  display: none;
 }
 
 #fb-car-overlay-mvp .fbco-block {
@@ -219,20 +254,69 @@
   color: rgba(0,0,0,0.5);
 }
 
-#fb-car-overlay-mvp[data-loading="1"] .fbco-spinner {
-  display: inline-block;
+#fb-car-overlay-mvp[data-loading="1"] .fbco-loading {
+  display: flex;
 }
 
-#fb-car-overlay-mvp .fbco-spinner {
+#fb-car-overlay-mvp[data-loading="1"] .fbco-spectrum,
+#fb-car-overlay-mvp[data-loading="1"] .fbco-section-header,
+#fb-car-overlay-mvp[data-loading="1"] .fbco-divider,
+#fb-car-overlay-mvp[data-loading="1"] .fbco-row,
+#fb-car-overlay-mvp[data-loading="1"] .fbco-block {
   display: none;
-  width: 12px;
-  height: 12px;
-  margin-left: 6px;
+}
+
+#fb-car-overlay-mvp .fbco-loading {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px 12px 24px;
+}
+
+#fb-car-overlay-mvp .fbco-loading-track {
+  position: relative;
+  width: 140px;
+  height: 20px;
+}
+
+#fb-car-overlay-mvp .fbco-loading-track::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  top: 50%;
+  height: 2px;
+  background: linear-gradient(90deg, rgba(0,0,0,0.15) 0%, rgba(0,0,0,0.4) 50%, rgba(0,0,0,0.15) 100%);
+  transform: translateY(-50%);
   border-radius: 999px;
-  border: 2px solid rgba(0,0,0,0.2);
-  border-top-color: rgba(0,0,0,0.6);
-  animation: fbco-spin 0.9s linear infinite;
-  vertical-align: middle;
+}
+
+#fb-car-overlay-mvp .fbco-loading-car {
+  position: absolute;
+  left: 0;
+  top: -2px;
+  font-size: 16px;
+  animation: fbco-drive 1.2s ease-in-out infinite;
+}
+
+#fb-car-overlay-mvp .fbco-loading-text {
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  color: rgba(0,0,0,0.7);
+}
+
+@keyframes fbco-drive {
+  0% {
+    transform: translateX(0);
+  }
+  50% {
+    transform: translateX(108px);
+  }
+  100% {
+    transform: translateX(0);
+  }
 }
 
 @keyframes fbco-spin {
@@ -247,6 +331,13 @@
   border-radius: 6px;
   background: rgba(0,0,0,0.04);
   white-space: normal;
+  line-height: 1.3;
+}
+
+#fb-car-overlay-mvp .fbco-disclaimer {
+  margin-top: 12px;
+  font-size: 11px;
+  color: rgba(0,0,0,0.5);
   line-height: 1.3;
 }
 

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "FB Marketplace Car Overlay (MVP)",
+  "name": "Car Spotter",
   "version": "0.4.0",
-  "description": "Overlays vehicle snapshot (year/make/model, price, mileage) on Facebook Marketplace listings.",
+  "description": "Car Spotter adds a vehicle snapshot and analysis overlay on Facebook Marketplace listings.",
   "permissions": ["activeTab"],
   "host_permissions": ["https://www.facebook.com/*", "https://car-bot.car-bot.workers.dev/*"],
   "content_scripts": [

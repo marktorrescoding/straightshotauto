@@ -47,16 +47,19 @@
       .filter(window.FBCO_isVisible)
       .slice(0, 5000);
 
+    function extractAllCurrency(text) {
+      if (!text) return [];
+      const matches = text.match(/\$\s?\d{1,3}(?:,\d{3})*(?:\.\d{2})?/g);
+      return matches || [];
+    }
+
     const candidates = [];
     for (const el of els) {
       const t = (el.innerText || "").trim();
       if (!t || t.length > 40) continue;
 
-      const cur = window.FBCO_extractCurrencyFromText(t);
-      if (!cur) continue;
-
-      const value = window.FBCO_parsePriceUSD(cur);
-      if (value == null || value < 100) continue;
+      const curs = extractAllCurrency(t);
+      if (!curs.length) continue;
 
       const rect = el.getBoundingClientRect();
       const yDist = Math.abs(rect.top - anchorTop);
@@ -71,7 +74,11 @@
 
       const struck = window.FBCO_hasLineThrough(el);
 
-      candidates.push({ text: cur, value, fontSize: fs, weight, yDist, struck });
+      for (const cur of curs) {
+        const value = window.FBCO_parsePriceUSD(cur);
+        if (value == null || value < 100) continue;
+        candidates.push({ text: cur, value, fontSize: fs, weight, yDist, struck });
+      }
     }
 
     if (!candidates.length) return null;
@@ -80,17 +87,33 @@
     const nonStruck = candidates.filter((c) => !c.struck);
     const pool0 = nonStruck.length ? nonStruck : candidates;
 
-    // If there are multiple prices near the title, listing price is usually the max.
-    // (This avoids picking a smaller “fee/payment” even near the title.)
-    const maxVal = Math.max(...pool0.map((c) => c.value));
-    const filtered = pool0.filter((c) => c.value >= maxVal * 0.8);
-    const pool = filtered.length ? filtered : pool0;
+    // If there are multiple prices near the title, prefer the smaller one
+    // when they look like an original/discount pair.
+    const maxFont = Math.max(...pool0.map((c) => c.fontSize));
+    const nearTitle = pool0.filter((c) => c.yDist <= 200 && Math.abs(c.fontSize - maxFont) <= 3);
+    const pool =
+      nearTitle.length >= 2
+        ? nearTitle
+        : (() => {
+            const maxVal = Math.max(...pool0.map((c) => c.value));
+            const filtered = pool0.filter((c) => c.value >= maxVal * 0.8);
+            return filtered.length ? filtered : pool0;
+          })();
 
     function score(c) {
       const fontScore = c.fontSize * 2.0 + c.weight / 250;
       const proximityScore = -c.yDist / 120;
       const magnitudeScore = Math.log10(c.value + 1) * 4.0;
       return fontScore + proximityScore + magnitudeScore;
+    }
+
+    if (pool.length >= 2) {
+      const maxVal = Math.max(...pool.map((c) => c.value));
+      const minVal = Math.min(...pool.map((c) => c.value));
+      if (minVal / maxVal >= 0.7) {
+        const min = pool.reduce((best, c) => (c.value < best.value ? c : best), pool[0]);
+        return min.text || null;
+      }
     }
 
     pool.sort((a, b) => score(b) - score(a));
@@ -110,15 +133,17 @@
     }
 
     m =
-      text.match(/\b(\d{2,3})\s*k\s*(miles|mile|mi)\b/i) ||
-      text.match(/\b(\d{2,3})k\s*(miles|mile|mi)\b/i);
+      text.match(/\b(\d{2,3})\s*k\s*(miles|mile|mi|millas)\b/i) ||
+      text.match(/\b(\d{2,3})k\s*(miles|mile|mi|millas)\b/i);
 
     if (m) {
       const miles = Number(m[1]) * 1000;
       return Number.isFinite(miles) ? { mileage_text: m[0], mileage_miles: miles } : null;
     }
 
-    m = text.match(/\bMileage\b[^0-9]{0,10}(\d{1,3}(?:,\d{3})+|\d{5,6})\b/i);
+    m =
+      text.match(/\bMileage\b[^0-9]{0,10}(\d{1,3}(?:,\d{3})+|\d{5,6})\b/i) ||
+      text.match(/\b(\d{1,3}(?:,\d{3})+|\d{5,6})\s*millas\b/i);
     if (m) {
       const miles = Number(m[1].replace(/,/g, ""));
       return Number.isFinite(miles) ? { mileage_text: `Mileage ${m[1]}`, mileage_miles: miles } : null;

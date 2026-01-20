@@ -2,6 +2,10 @@
   const UPDATE_DEBOUNCE_MS = 900;
   const API_URL = "https://car-bot.car-bot.workers.dev/analyze";
 
+  function isItemPage() {
+    return /\/marketplace\/item\//.test(location.pathname);
+  }
+
   function buildSnapshotKey(vehicle) {
     if (!vehicle) return null;
     return JSON.stringify({
@@ -41,13 +45,17 @@
 
     state.lastSnapshotKey = key;
     state.analysisLoading = true;
+    if (!state.analysisReady) {
+      state.analysisReady = false;
+      state.lastAnalysis = null;
+    }
     state.analysisError = null;
-    state.lastAnalysis = null;
     state.analysisSeq += 1;
     const seq = state.analysisSeq;
 
     window.FBCO_updateOverlay(vehicle, {
-      loading: true,
+      loading: !state.analysisReady,
+      ready: state.analysisReady,
       error: null,
       data: null
     });
@@ -86,14 +94,17 @@
 
       if (seq !== state.analysisSeq) return;
       state.lastAnalysis = data;
+      state.analysisReady = true;
     } catch (err) {
       if (seq !== state.analysisSeq) return;
       state.analysisError = err?.message || "Request failed";
+      state.analysisReady = true;
     } finally {
       if (seq !== state.analysisSeq) return;
       state.analysisLoading = false;
       window.FBCO_updateOverlay(vehicle, {
-        loading: state.analysisLoading,
+        loading: !state.analysisReady,
+        ready: state.analysisReady,
         error: state.analysisError,
         data: state.lastAnalysis
       });
@@ -104,15 +115,34 @@
     const state = window.FBCO_STATE;
     if (!state) return;
 
+    if (!isItemPage()) {
+      window.FBCO_removeOverlay && window.FBCO_removeOverlay();
+      return;
+    }
+
     // If user closed overlay, don't recreate it.
     if (state.dismissed) return;
 
     // Avoid updating while user is selecting text inside overlay
     if (state.isUserSelecting) return;
 
-    const vehicle = window.FBCO_extractVehicleSnapshot();
+    let vehicle = window.FBCO_extractVehicleSnapshot();
+
+    if (state.lastVehicle) {
+      const merged = { ...state.lastVehicle };
+      Object.entries(vehicle || {}).forEach(([key, value]) => {
+        if (value !== null && value !== undefined && value !== "") merged[key] = value;
+      });
+      vehicle = merged;
+    }
+
+    if (vehicle?.year && vehicle?.make) {
+      state.lastVehicle = vehicle;
+    }
+
     window.FBCO_updateOverlay(vehicle, {
-      loading: state.analysisLoading,
+      loading: !state.analysisReady,
+      ready: state.analysisReady,
       error: state.analysisError,
       data: state.lastAnalysis
     });
@@ -141,8 +171,11 @@
         window.FBCO_STATE.lastAnalysis = null;
         window.FBCO_STATE.lastSnapshotKey = null;
         window.FBCO_STATE.analysisSeq += 1;
+        window.FBCO_STATE.analysisReady = false;
+        window.FBCO_STATE.lastVehicle = null;
       }
 
+      window.FBCO_removeOverlay && window.FBCO_removeOverlay();
       scheduleUpdate();
     }
   }, 1000);

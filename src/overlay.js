@@ -67,6 +67,7 @@
     const el = document.getElementById(overlayId);
     if (el) el.remove();
   }
+  window.FBCO_removeOverlay = removeOverlay;
 
   function ensureOverlay() {
     if (window.FBCO_STATE.dismissed) return null;
@@ -83,15 +84,23 @@
       <!-- Full panel -->
       <div class="fbco-panel" id="fbco-panel">
         <div class="fbco-header" id="fbco-drag-handle">
-          <div class="fbco-title">Car Snapshot</div>
+          <div class="fbco-title">🦉 Car Spotter</div>
           <div class="fbco-actions">
-            <button id="fbco-reload" class="fbco-icon-btn" type="button" title="Reload analysis">↻</button>
             <button id="fbco-minimize" class="fbco-icon-btn" type="button" title="Minimize">–</button>
             <button id="fbco-close" class="fbco-icon-btn" type="button" title="Close">×</button>
           </div>
         </div>
 
         <div class="fbco-body" id="fbco-body">
+          <div class="fbco-loading" id="fbco-loading">
+            <div class="fbco-loading-track" aria-hidden="true">
+              <span class="fbco-loading-car">🚗</span>
+            </div>
+            <div class="fbco-loading-text">Analyzing…</div>
+          </div>
+
+          <div class="fbco-vehicle-title" id="fbco-vehicle-title">—</div>
+
           <div class="fbco-spectrum fbco-spectrum-top">
             <div class="fbco-spectrum-label">Overall rating</div>
             <div class="fbco-spectrum-bar">
@@ -106,97 +115,6 @@
               <span>🚀 Steal</span>
             </div>
             <div id="fbco-score-value" class="fbco-score-value">--</div>
-          </div>
-
-          <div class="fbco-row">
-            <div class="fbco-label">Parsed</div>
-            <div class="fbco-val"><span id="fbco-parsed-value" class="fbco-value">Detecting…</span></div>
-          </div>
-
-          <div class="fbco-row">
-            <div class="fbco-label">Price</div>
-            <div class="fbco-val"><span id="fbco-price-value" class="fbco-value">Detecting…</span></div>
-          </div>
-
-          <div class="fbco-row">
-            <div class="fbco-label">Mileage</div>
-            <div class="fbco-val"><span id="fbco-mileage-value" class="fbco-value">Detecting…</span></div>
-          </div>
-
-          <div class="fbco-row fbco-row-wide">
-            <div class="fbco-label">Source</div>
-            <div class="fbco-val"><span id="fbco-raw-value" class="fbco-value">(not found)</span></div>
-          </div>
-
-          <div class="fbco-divider"></div>
-
-          <div class="fbco-section-title">Details</div>
-
-          <div class="fbco-row">
-            <div class="fbco-label">Transmission</div>
-            <div class="fbco-val"><span id="fbco-transmission" class="fbco-value">(not found)</span></div>
-          </div>
-
-          <div class="fbco-row">
-            <div class="fbco-label">Drivetrain</div>
-            <div class="fbco-val"><span id="fbco-drivetrain" class="fbco-value">(not found)</span></div>
-          </div>
-
-          <div class="fbco-row">
-            <div class="fbco-label">Fuel</div>
-            <div class="fbco-val"><span id="fbco-fuel" class="fbco-value">(not found)</span></div>
-          </div>
-
-          <div class="fbco-row">
-            <div class="fbco-label">Colors</div>
-            <div class="fbco-val"><span id="fbco-colors" class="fbco-value">(not found)</span></div>
-          </div>
-
-          <div class="fbco-row">
-            <div class="fbco-label">MPG</div>
-            <div class="fbco-val"><span id="fbco-mpg" class="fbco-value">(not found)</span></div>
-          </div>
-
-          <div class="fbco-row">
-            <div class="fbco-label">NHTSA</div>
-            <div class="fbco-val"><span id="fbco-nhtsa" class="fbco-value">(not found)</span></div>
-          </div>
-
-          <div class="fbco-row">
-            <div class="fbco-label">Title</div>
-            <div class="fbco-val"><span id="fbco-title-status" class="fbco-value">(not found)</span></div>
-          </div>
-
-          <div class="fbco-row">
-            <div class="fbco-label">Paid off</div>
-            <div class="fbco-val"><span id="fbco-paid-off" class="fbco-value">(not found)</span></div>
-          </div>
-
-          <div class="fbco-row">
-            <div class="fbco-label">VIN</div>
-            <div class="fbco-val"><span id="fbco-vin" class="fbco-value">(not found)</span></div>
-          </div>
-
-          <div class="fbco-block">
-            <div class="fbco-label">Seller notes</div>
-            <div id="fbco-seller-notes" class="fbco-note">(not found)</div>
-          </div>
-
-          <div class="fbco-divider"></div>
-
-          <div class="fbco-section-title">Analysis</div>
-
-          <div class="fbco-row fbco-row-wide">
-            <div class="fbco-label">Status</div>
-            <div class="fbco-val">
-              <span id="fbco-analysis-status" class="fbco-value">Waiting…</span>
-              <span class="fbco-spinner" aria-hidden="true"></span>
-            </div>
-          </div>
-
-          <div class="fbco-row fbco-row-wide">
-            <div class="fbco-label">Summary</div>
-            <div class="fbco-val"><span id="fbco-analysis-summary" class="fbco-value">(none)</span></div>
           </div>
 
           <div class="fbco-block">
@@ -237,6 +155,96 @@
           <div class="fbco-block">
             <div class="fbco-label">Risk flags</div>
             <ul id="fbco-analysis-risks" class="fbco-list"></ul>
+          </div>
+
+          <div class="fbco-divider"></div>
+
+          <div class="fbco-section-header">
+            <div class="fbco-section-title">Listing details</div>
+            <button id="fbco-details-toggle" class="fbco-link-btn" type="button">Show</button>
+          </div>
+
+          <div id="fbco-details-section" class="fbco-collapsible" data-collapsed="1">
+            <div class="fbco-row fbco-row-wide">
+              <div class="fbco-label">Summary</div>
+              <div class="fbco-val"><span id="fbco-summary" class="fbco-value">(none)</span></div>
+            </div>
+
+            <div class="fbco-row">
+              <div class="fbco-label">Parsed</div>
+              <div class="fbco-val"><span id="fbco-parsed-value" class="fbco-value">Detecting…</span></div>
+            </div>
+
+            <div class="fbco-row">
+              <div class="fbco-label">Price</div>
+              <div class="fbco-val"><span id="fbco-price-value" class="fbco-value">Detecting…</span></div>
+            </div>
+
+            <div class="fbco-row">
+              <div class="fbco-label">Mileage</div>
+              <div class="fbco-val"><span id="fbco-mileage-value" class="fbco-value">Detecting…</span></div>
+            </div>
+
+            <div class="fbco-row fbco-row-wide">
+              <div class="fbco-label">Source</div>
+              <div class="fbco-val"><span id="fbco-raw-value" class="fbco-value">(not found)</span></div>
+            </div>
+
+            <div class="fbco-divider"></div>
+
+            <div class="fbco-row">
+              <div class="fbco-label">Transmission</div>
+              <div class="fbco-val"><span id="fbco-transmission" class="fbco-value">(not found)</span></div>
+            </div>
+
+            <div class="fbco-row">
+              <div class="fbco-label">Drivetrain</div>
+              <div class="fbco-val"><span id="fbco-drivetrain" class="fbco-value">(not found)</span></div>
+            </div>
+
+            <div class="fbco-row">
+              <div class="fbco-label">Fuel</div>
+              <div class="fbco-val"><span id="fbco-fuel" class="fbco-value">(not found)</span></div>
+            </div>
+
+            <div class="fbco-row">
+              <div class="fbco-label">Colors</div>
+              <div class="fbco-val"><span id="fbco-colors" class="fbco-value">(not found)</span></div>
+            </div>
+
+            <div class="fbco-row">
+              <div class="fbco-label">MPG</div>
+              <div class="fbco-val"><span id="fbco-mpg" class="fbco-value">(not found)</span></div>
+            </div>
+
+            <div class="fbco-row">
+              <div class="fbco-label">NHTSA</div>
+              <div class="fbco-val"><span id="fbco-nhtsa" class="fbco-value">(not found)</span></div>
+            </div>
+
+            <div class="fbco-row">
+              <div class="fbco-label">Title</div>
+              <div class="fbco-val"><span id="fbco-title-status" class="fbco-value">(not found)</span></div>
+            </div>
+
+            <div class="fbco-row">
+              <div class="fbco-label">Paid off</div>
+              <div class="fbco-val"><span id="fbco-paid-off" class="fbco-value">(not found)</span></div>
+            </div>
+
+            <div class="fbco-row">
+              <div class="fbco-label">VIN</div>
+              <div class="fbco-val"><span id="fbco-vin" class="fbco-value">(not found)</span></div>
+            </div>
+
+            <div class="fbco-block">
+              <div class="fbco-label">Seller notes</div>
+              <div id="fbco-seller-notes" class="fbco-note">(not found)</div>
+            </div>
+          </div>
+
+          <div class="fbco-disclaimer">
+            For safety and financial decisions, do your own research and inspection.
           </div>
         </div>
       </div>
@@ -296,22 +304,16 @@
       applyOverlayState(root, st);
     });
 
-    root.querySelector("#fbco-reload")?.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const st = window.FBCO_STATE;
-      st.analysisLoading = false;
-      st.analysisError = null;
-      st.lastAnalysis = null;
-      st.lastSnapshotKey = null;
-      st.analysisSeq += 1;
-
-      const v = window.FBCO_extractVehicleSnapshot();
-      window.FBCO_updateOverlay(v, {
-        loading: st.analysisLoading,
-        error: st.analysisError,
-        data: st.lastAnalysis
+    const detailsToggle = root.querySelector("#fbco-details-toggle");
+    const detailsSection = root.querySelector("#fbco-details-section");
+    if (detailsToggle && detailsSection) {
+      detailsToggle.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const collapsed = detailsSection.dataset.collapsed !== "0";
+        detailsSection.dataset.collapsed = collapsed ? "0" : "1";
+        detailsToggle.textContent = collapsed ? "Hide" : "Show";
       });
-    });
+    }
 
     // Restore from icon
     root.querySelector("#fbco-mini")?.addEventListener("click", (e) => {
@@ -542,12 +544,12 @@
     const colorsEl = document.getElementById("fbco-colors");
     const mpgEl = document.getElementById("fbco-mpg");
     const nhtsaEl = document.getElementById("fbco-nhtsa");
-    const titleEl = document.getElementById("fbco-title-status");
+    const titleStatusEl = document.getElementById("fbco-title-status");
     const paidOffEl = document.getElementById("fbco-paid-off");
     const vinEl = document.getElementById("fbco-vin");
     const sellerNotesEl = document.getElementById("fbco-seller-notes");
-    const statusEl = document.getElementById("fbco-analysis-status");
-    const summaryEl = document.getElementById("fbco-analysis-summary");
+    const summaryEl = document.getElementById("fbco-summary");
+    const vehicleTitleEl = document.getElementById("fbco-vehicle-title");
     const issuesEl = document.getElementById("fbco-analysis-issues");
     const upsidesEl = document.getElementById("fbco-analysis-upsides");
     const checklistEl = document.getElementById("fbco-analysis-checklist");
@@ -578,7 +580,7 @@
       mpgEl.textContent = mpgParts.length ? mpgParts.join(" · ") : "Not found";
     }
     if (nhtsaEl) nhtsaEl.textContent = vehicle.nhtsa_rating != null ? `${vehicle.nhtsa_rating}/5` : "Not found";
-    if (titleEl) titleEl.textContent = vehicle.title_status || "Not found";
+    if (titleStatusEl) titleStatusEl.textContent = vehicle.title_status || "Not found";
     if (paidOffEl) {
       if (vehicle.paid_off == null) {
         paidOffEl.textContent = "Not found";
@@ -593,24 +595,17 @@
     const error = analysisState?.error;
     const data = analysisState?.data;
 
-    const busy = Boolean(loading || (!data && !error));
+    const busy = Boolean(loading);
     root.dataset.loading = busy ? "1" : "0";
 
-    if (statusEl) {
-      if (!vehicle?.year || !vehicle?.make) {
-        statusEl.textContent = "Analyzing…";
-      } else if (loading) {
-        statusEl.textContent = "Analyzing…";
-      } else if (error) {
-        statusEl.textContent = `Error: ${error}`;
-      } else if (data) {
-        statusEl.textContent = "Ready";
+    if (summaryEl) summaryEl.textContent = data?.summary || "(none)";
+    if (vehicleTitleEl) {
+      if (vehicle?.year && vehicle?.make) {
+        vehicleTitleEl.textContent = [vehicle.year, vehicle.make, vehicle.model].filter(Boolean).join(" ");
       } else {
-        statusEl.textContent = "Analyzing…";
+        vehicleTitleEl.textContent = "—";
       }
     }
-
-    if (summaryEl) summaryEl.textContent = data?.summary || "(none)";
 
     renderList(issuesEl, data?.common_issues, stringifyIssue);
     renderList(upsidesEl, data?.upsides);
