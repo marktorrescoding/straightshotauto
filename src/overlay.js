@@ -85,6 +85,7 @@
         <div class="fbco-header" id="fbco-drag-handle">
           <div class="fbco-title">Car Snapshot</div>
           <div class="fbco-actions">
+            <button id="fbco-reload" class="fbco-icon-btn" type="button" title="Reload analysis">↻</button>
             <button id="fbco-minimize" class="fbco-icon-btn" type="button" title="Minimize">–</button>
             <button id="fbco-close" class="fbco-icon-btn" type="button" title="Close">×</button>
           </div>
@@ -169,14 +170,38 @@
 
           <div class="fbco-section-title">Analysis</div>
 
+          <div class="fbco-spectrum">
+            <div class="fbco-spectrum-label">Overall rating</div>
+            <div class="fbco-spectrum-bar">
+              <div id="fbco-spectrum-marker" class="fbco-spectrum-marker"></div>
+            </div>
+            <div class="fbco-spectrum-scale">
+              <span>❌ No</span>
+              <span>⚠️ Risky</span>
+              <span>⚖️ Fair</span>
+              <span>👍 Good</span>
+              <span>💎 Great</span>
+              <span>🚀 Steal</span>
+            </div>
+            <div id="fbco-score-value" class="fbco-score-value">--</div>
+          </div>
+
           <div class="fbco-row fbco-row-wide">
             <div class="fbco-label">Status</div>
-            <div class="fbco-val"><span id="fbco-analysis-status" class="fbco-value">Waiting…</span></div>
+            <div class="fbco-val">
+              <span id="fbco-analysis-status" class="fbco-value">Waiting…</span>
+              <span class="fbco-spinner" aria-hidden="true"></span>
+            </div>
           </div>
 
           <div class="fbco-row fbco-row-wide">
             <div class="fbco-label">Summary</div>
             <div class="fbco-val"><span id="fbco-analysis-summary" class="fbco-value">(none)</span></div>
+          </div>
+
+          <div class="fbco-block">
+            <div class="fbco-label">Tags</div>
+            <div id="fbco-analysis-tags" class="fbco-tags"></div>
           </div>
 
           <div class="fbco-block">
@@ -192,6 +217,11 @@
           <div class="fbco-block">
             <div class="fbco-label">Inspection checks</div>
             <ul id="fbco-analysis-checklist" class="fbco-list"></ul>
+          </div>
+
+          <div class="fbco-block">
+            <div class="fbco-label">Buyer questions</div>
+            <ul id="fbco-analysis-questions" class="fbco-list"></ul>
           </div>
 
           <div class="fbco-block">
@@ -259,6 +289,23 @@
       st.minimized = true;
       saveOverlayState(st);
       applyOverlayState(root, st);
+    });
+
+    root.querySelector("#fbco-reload")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const st = window.FBCO_STATE;
+      st.analysisLoading = false;
+      st.analysisError = null;
+      st.lastAnalysis = null;
+      st.lastSnapshotKey = null;
+      st.analysisSeq += 1;
+
+      const v = window.FBCO_extractVehicleSnapshot();
+      window.FBCO_updateOverlay(v, {
+        loading: st.analysisLoading,
+        error: st.analysisError,
+        data: st.lastAnalysis
+      });
     });
 
     // Restore from icon
@@ -441,6 +488,35 @@
     });
   }
 
+  function renderTags(el, items) {
+    if (!el) return;
+    el.innerHTML = "";
+    if (!items || !items.length) {
+      const span = document.createElement("span");
+      span.className = "fbco-tag fbco-tag-empty";
+      span.textContent = "None";
+      el.appendChild(span);
+      return;
+    }
+    items.forEach((item) => {
+      if (!item) return;
+      const span = document.createElement("span");
+      span.className = "fbco-tag";
+      span.textContent = item;
+      el.appendChild(span);
+    });
+  }
+
+  function scoreLabel(score) {
+    if (score == null) return null;
+    if (score < 15) return "❌ No";
+    if (score < 35) return "⚠️ Risky";
+    if (score < 55) return "⚖️ Fair";
+    if (score < 72) return "👍 Good";
+    if (score < 88) return "💎 Great";
+    return "🚀 Steal";
+  }
+
   window.FBCO_updateOverlay = function (vehicle, analysisState) {
     const root = ensureOverlay();
     if (!root) return;
@@ -470,8 +546,12 @@
     const issuesEl = document.getElementById("fbco-analysis-issues");
     const upsidesEl = document.getElementById("fbco-analysis-upsides");
     const checklistEl = document.getElementById("fbco-analysis-checklist");
+    const questionsEl = document.getElementById("fbco-analysis-questions");
     const priceEl = document.getElementById("fbco-analysis-price");
     const risksEl = document.getElementById("fbco-analysis-risks");
+    const scoreValEl = document.getElementById("fbco-score-value");
+    const scoreMarkerEl = document.getElementById("fbco-spectrum-marker");
+    const tagsEl = document.getElementById("fbco-analysis-tags");
 
     if (parsedValEl) parsedValEl.textContent = vehicle.normalized || "Not found";
     if (rawValEl) rawValEl.textContent = vehicle.source_text || "(not found)";
@@ -507,9 +587,12 @@
     const error = analysisState?.error;
     const data = analysisState?.data;
 
+    const busy = Boolean(loading || (!data && !error));
+    root.dataset.loading = busy ? "1" : "0";
+
     if (statusEl) {
       if (!vehicle?.year || !vehicle?.make) {
-        statusEl.textContent = "Need year + make";
+        statusEl.textContent = "Analyzing…";
       } else if (loading) {
         statusEl.textContent = "Analyzing…";
       } else if (error) {
@@ -517,7 +600,7 @@
       } else if (data) {
         statusEl.textContent = "Ready";
       } else {
-        statusEl.textContent = "Waiting…";
+        statusEl.textContent = "Analyzing…";
       }
     }
 
@@ -526,7 +609,26 @@
     renderList(issuesEl, data?.common_issues, stringifyIssue);
     renderList(upsidesEl, data?.upsides);
     renderList(checklistEl, data?.inspection_checklist);
+    renderList(questionsEl, data?.buyer_questions);
     renderList(risksEl, data?.risk_flags);
+    renderTags(tagsEl, data?.tags);
     if (priceEl) priceEl.textContent = data?.price_opinion || "(none)";
+
+    if (scoreValEl && scoreMarkerEl) {
+      const score = Number.isFinite(Number(data?.overall_score))
+        ? Number(data?.overall_score)
+        : Number.isFinite(Number(data?.score))
+        ? Number(data?.score)
+        : null;
+      if (score == null) {
+        scoreValEl.textContent = busy ? "…" : "--";
+        scoreMarkerEl.style.left = "0%";
+      } else {
+        const clamped = Math.min(100, Math.max(0, score));
+        const label = scoreLabel(clamped);
+        scoreValEl.textContent = label ? `${label} (${clamped}/100)` : `${clamped}/100`;
+        scoreMarkerEl.style.left = `${clamped}%`;
+      }
+    }
   };
 })();

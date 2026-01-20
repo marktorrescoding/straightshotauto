@@ -135,6 +135,13 @@
 
       // New listing / navigation: allow overlay again
       if (window.FBCO_STATE) window.FBCO_STATE.dismissed = false;
+      if (window.FBCO_STATE) {
+        window.FBCO_STATE.analysisLoading = false;
+        window.FBCO_STATE.analysisError = null;
+        window.FBCO_STATE.lastAnalysis = null;
+        window.FBCO_STATE.lastSnapshotKey = null;
+        window.FBCO_STATE.analysisSeq += 1;
+      }
 
       scheduleUpdate();
     }

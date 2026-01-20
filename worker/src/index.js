@@ -5,6 +5,7 @@ const SYSTEM_PROMPT =
   "Return only valid JSON.";
 
 const CACHE_TTL_SECONDS = 60 * 60 * 24;
+const CACHE_VERSION = "v2";
 const RATE_MIN_INTERVAL_MS = 5000;
 const RATE_WINDOW_MS = 60 * 60 * 1000;
 const RATE_MAX_REQUESTS = 30;
@@ -115,7 +116,7 @@ export default {
     }
 
     const snapshotKey = await hashString(JSON.stringify(snapshot));
-    const cacheKey = new Request(`https://cache.car-bot.local/analyze/${snapshotKey}`);
+    const cacheKey = new Request(`https://cache.car-bot.local/analyze/${CACHE_VERSION}/${snapshotKey}`);
     const cache = caches.default;
     const cached = await cache.match(cacheKey);
     if (cached) {
@@ -155,10 +156,18 @@ export default {
       "common_issues (array of {issue, severity, estimated_cost}),",
       "upsides (array of strings),",
       "inspection_checklist (array of strings),",
+      "buyer_questions (array of strings),",
       "price_opinion (string),",
+      "overall_score (number 0-100),",
       "risk_flags (array of strings),",
+      "tags (array of emoji-labeled short strings),",
       "confidence (number 0-1),",
-      "notes (string, optional)."
+      "notes (string, optional).",
+      "",
+      "Overall score guidance (0-100):",
+      "0-14 = ❌ No, 15-34 = ⚠️ Risky, 35-54 = ⚖️ Fair, 55-71 = 👍 Good, 72-87 = 💎 Great, 88-100 = 🚀 Steal.",
+      "Use price vs mileage, known issues, title status, and missing info to pick a score.",
+      "Tag examples: 🔧 Money pit in disguise, 🚨 Fixer-upper (emphasis on fixer), ⚠️ Budget for repairs, ✅ Mechanically reasonable, 💪 Known for going forever, 🏆 Buy it and forget about it."
     ].join("\n");
 
     const openaiRes = await fetch("https://api.openai.com/v1/responses", {
@@ -206,6 +215,9 @@ export default {
 
     try {
       const parsed = JSON.parse(text);
+      if (!Number.isFinite(Number(parsed?.overall_score)) && Number.isFinite(Number(parsed?.confidence))) {
+        parsed.overall_score = Math.round(Number(parsed.confidence) * 100);
+      }
       const res = jsonResponse(parsed, origin, 200);
       res.headers.set("X-Cache", "MISS");
       ctx?.waitUntil?.(cache.put(cacheKey, res.clone()));

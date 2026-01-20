@@ -66,6 +66,10 @@
   font-size: 16px;
 }
 
+#fb-car-overlay-mvp[data-loading="1"] #fbco-reload {
+  animation: fbco-spin 1.1s linear infinite;
+}
+
 #fb-car-overlay-mvp .fbco-body {
   padding: 12px;
   font-size: 13px;
@@ -127,6 +131,106 @@
 #fb-car-overlay-mvp .fbco-list li {
   margin-bottom: 6px;
   line-height: 1.3;
+}
+
+#fb-car-overlay-mvp .fbco-spectrum {
+  display: grid;
+  gap: 8px;
+  margin: 6px 0 12px;
+}
+
+#fb-car-overlay-mvp .fbco-spectrum-label {
+  font-weight: 700;
+  color: rgba(0,0,0,0.75);
+}
+
+#fb-car-overlay-mvp .fbco-spectrum-bar {
+  position: relative;
+  height: 12px;
+  background: rgba(0,0,0,0.08);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+#fb-car-overlay-mvp .fbco-spectrum-bar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, #e05252 0%, #f0b429 45%, #3bb273 100%);
+  opacity: 0.25;
+}
+
+#fb-car-overlay-mvp .fbco-spectrum-marker {
+  position: absolute;
+  top: -3px;
+  width: 2px;
+  height: 18px;
+  background: rgba(0,0,0,0.7);
+  left: 0%;
+  transform: translateX(-1px);
+  transition: left 200ms ease-out;
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.7);
+}
+
+#fb-car-overlay-mvp .fbco-spectrum-scale {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 6px;
+  font-size: 11px;
+  color: rgba(0,0,0,0.75);
+}
+
+#fb-car-overlay-mvp .fbco-spectrum-scale span {
+  text-align: center;
+  line-height: 1.2;
+}
+
+#fb-car-overlay-mvp .fbco-score-value {
+  font-weight: 700;
+  font-size: 12px;
+  color: rgba(0,0,0,0.7);
+}
+
+#fb-car-overlay-mvp .fbco-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+#fb-car-overlay-mvp .fbco-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(0,0,0,0.06);
+  font-size: 11px;
+}
+
+#fb-car-overlay-mvp .fbco-tag-empty {
+  color: rgba(0,0,0,0.5);
+}
+
+#fb-car-overlay-mvp[data-loading="1"] .fbco-spinner {
+  display: inline-block;
+}
+
+#fb-car-overlay-mvp .fbco-spinner {
+  display: none;
+  width: 12px;
+  height: 12px;
+  margin-left: 6px;
+  border-radius: 999px;
+  border: 2px solid rgba(0,0,0,0.2);
+  border-top-color: rgba(0,0,0,0.6);
+  animation: fbco-spin 0.9s linear infinite;
+  vertical-align: middle;
+}
+
+@keyframes fbco-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 #fb-car-overlay-mvp .fbco-note {
