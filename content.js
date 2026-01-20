@@ -218,6 +218,11 @@
   // Initial run
   scheduleUpdate();
 
+  window.addEventListener("pageshow", () => scheduleUpdate());
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) scheduleUpdate();
+  });
+
   // FB is SPA: URL changes
   let lastUrl = location.href;
   setInterval(() => {

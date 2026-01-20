@@ -436,6 +436,7 @@
     const selectedCategory = getSelectedCategoryLabel();
     const categoryIsVehicle = selectedCategory ? isVehicleCategory(selectedCategory) : null;
     const signalVehicle = hasVehicleSignals();
+    const vehicleStatus = categoryIsVehicle === null ? (signalVehicle ? true : null) : categoryIsVehicle;
 
     return {
       url: location.href,
@@ -448,7 +449,7 @@
       price_usd: price_usd != null ? price_usd : null,
       mileage_text: mileage.mileage_text,
       mileage_miles: mileage.mileage_miles,
-      is_vehicle: categoryIsVehicle === null ? signalVehicle : categoryIsVehicle,
+      is_vehicle: vehicleStatus,
       transmission: descTransmission || null,
       drivetrain: descDrivetrain || null,
       fuel_type: descFuel || null,

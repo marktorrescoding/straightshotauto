@@ -105,7 +105,10 @@
           <div class="fbco-vehicle-title" id="fbco-vehicle-title">—</div>
 
           <div class="fbco-spectrum fbco-spectrum-top">
-            <div class="fbco-spectrum-label">Overall rating</div>
+            <div class="fbco-spectrum-header">
+              <div class="fbco-spectrum-label">Overall rating</div>
+              <div id="fbco-score-value" class="fbco-score-value">--</div>
+            </div>
             <div class="fbco-spectrum-bar">
               <div id="fbco-spectrum-marker" class="fbco-spectrum-marker"></div>
             </div>
@@ -117,7 +120,6 @@
               <span>💎 Great</span>
               <span>🚀 Steal</span>
             </div>
-            <div id="fbco-score-value" class="fbco-score-value">--</div>
           </div>
 
           <div class="fbco-block">
@@ -264,11 +266,18 @@
 
     const titleIcon = root.querySelector("#fbco-title-icon");
     const miniIcon = root.querySelector("#fbco-mini-icon");
-    if (window.chrome?.runtime?.getURL) {
-      const iconUrl = window.chrome.runtime.getURL("assets/icon48.png");
-      if (titleIcon) titleIcon.src = iconUrl;
-      if (miniIcon) miniIcon.src = iconUrl;
-    }
+    const setIcons = () => {
+      try {
+        const runtime = globalThis.chrome?.runtime;
+        if (!runtime?.getURL || !runtime?.id) return;
+        const iconUrl = runtime.getURL("assets/icon48.png");
+        if (titleIcon) titleIcon.src = iconUrl;
+        if (miniIcon) miniIcon.src = iconUrl;
+      } catch {
+        // Extension context can be invalidated during reloads; ignore and continue.
+      }
+    };
+    setIcons();
 
     // Only stop propagation for non-pointer events.
     // Pointer events are used for drag and must work reliably.
@@ -572,8 +581,28 @@
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "fbco-btn-chip";
-        btn.textContent = text;
-        btn.dataset.fbcoMessage = text;
+        let displayText = text;
+        let messageText = text;
+        let showDollar = false;
+        if (text.startsWith("💵")) {
+          displayText = text.replace(/^💵\s*/, "");
+          messageText = displayText;
+          showDollar = true;
+        } else if (text.startsWith("$")) {
+          displayText = text.replace(/^\$\s*/, "");
+          messageText = displayText;
+          showDollar = true;
+        }
+        if (showDollar) {
+          const icon = document.createElement("span");
+          icon.className = "fbco-chip-icon";
+          icon.textContent = "$";
+          btn.appendChild(icon);
+        }
+        const label = document.createElement("span");
+        label.textContent = displayText;
+        btn.appendChild(label);
+        btn.dataset.fbcoMessage = messageText;
         li.appendChild(btn);
       } else {
         li.textContent = text;
@@ -688,7 +717,11 @@
     if (summaryEl) summaryEl.textContent = data?.summary || "(none)";
     if (vehicleTitleEl) {
       if (vehicle?.year && vehicle?.make) {
-        vehicleTitleEl.textContent = [vehicle.year, vehicle.make, vehicle.model].filter(Boolean).join(" ");
+        const name = [vehicle.year, vehicle.make, vehicle.model].filter(Boolean).join(" ");
+        const price = vehicle.price_usd ? window.FBCO_formatUSD(vehicle.price_usd) : null;
+        const miles = vehicle.mileage_miles ? window.FBCO_formatMiles(vehicle.mileage_miles) : null;
+        const extras = [price, miles].filter(Boolean).join(" / ");
+        vehicleTitleEl.textContent = extras ? `${name} (${extras})` : name;
       } else {
         vehicleTitleEl.textContent = "—";
       }

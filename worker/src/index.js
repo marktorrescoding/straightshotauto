@@ -1,6 +1,7 @@
 const SYSTEM_PROMPT =
   "You analyze used car listings and return a concise, structured JSON response for a buyer. " +
-  "Be specific to the year/make/model and avoid generic advice. " +
+  "Be specific to the exact year/make/model and avoid generic advice. " +
+  "Common issues must be relevant to that year/generation (no broad make-wide issues). " +
   "If data is missing, make conservative assumptions and mention it in notes. " +
   "Return only valid JSON.";
 
@@ -170,7 +171,16 @@ export default {
       "Overall score guidance (0-100):",
       "0-14 = ❌ No, 15-34 = ⚠️ Risky, 35-54 = ⚖️ Fair, 55-71 = 👍 Good, 72-87 = 💎 Great, 88-100 = 🚀 Steal.",
       "Use price vs mileage, known issues, title status, and missing info to pick a score.",
-      "Tag examples: 🔧 Money pit in disguise, 🚨 Fixer-upper (emphasis on fixer), ⚠️ Budget for repairs, ✅ Mechanically reasonable, 💪 Known for going forever, 🏆 Buy it and forget about it."
+      "Tag examples: 🔧 Money pit in disguise, 🚨 Fixer-upper (emphasis on fixer), ⚠️ Budget for repairs, ✅ Mechanically reasonable, 💪 Known for going forever, 🏆 Buy it and forget about it.",
+      "If there is a strong case to negotiate, add one extra buyer question prefixed with \"$\" that suggests a reasonable offer based on needed repairs or red flags.",
+      "Do not replace other questions. If referencing issues not stated by the seller, explicitly say they are common for this year/model and make the question conditional (e.g., \"If you know about X...\").",
+      "Inspection checks must be DIY-friendly (what an average buyer can do on-site without tools): test drive behavior, listen for noises, check lights, inspect fluids, check for leaks, check tires/brakes visually, verify warning lights.",
+      "Buyer questions must be specific to the seller's description; avoid generic questions already answered.",
+      "Do not ask about clutch replacement or major repairs unless the seller text indicates a problem or heavy wear.",
+      "If electrical issues are mentioned, ask targeted follow-ups (e.g., which codes, how often, any diagnostics done).",
+      "Common issues should be listed only if they are explicitly mentioned by the seller or are well-known for that exact year/generation. If unsure, omit.",
+      "Negotiation questions must cite seller-provided issues or clearly state they are common for this year/model with typical mileage context.",
+      "If the seller did not mention the issue, the negotiation question must include the context in the question itself (e.g., \"On a 2012 Pilot, transmission issues can show up around 140k+ miles; if that applies here, would you consider...\")."
     ].join("\n");
 
     const openaiRes = await fetch("https://api.openai.com/v1/responses", {
