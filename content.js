@@ -140,12 +140,21 @@
       state.lastVehicle = vehicle;
     }
 
-    window.FBCO_updateOverlay(vehicle, {
-      loading: !state.analysisReady,
+    const renderKey = JSON.stringify({
+      vehicle,
       ready: state.analysisReady,
       error: state.analysisError,
       data: state.lastAnalysis
     });
+    if (renderKey !== state.lastRenderKey) {
+      state.lastRenderKey = renderKey;
+      window.FBCO_updateOverlay(vehicle, {
+        loading: !state.analysisReady,
+        ready: state.analysisReady,
+        error: state.analysisError,
+        data: state.lastAnalysis
+      });
+    }
 
     if (vehicle?.year && vehicle?.make) {
       requestAnalysis(vehicle);
@@ -219,6 +228,7 @@
         window.FBCO_STATE.analysisSeq += 1;
         window.FBCO_STATE.analysisReady = false;
         window.FBCO_STATE.lastVehicle = null;
+        window.FBCO_STATE.lastRenderKey = null;
       }
 
       window.FBCO_removeOverlay && window.FBCO_removeOverlay();

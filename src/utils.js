@@ -9,7 +9,8 @@
     lastSnapshotKey: null,
     analysisSeq: 0,
     analysisReady: false,
-    lastVehicle: null
+    lastVehicle: null,
+    lastRenderKey: null
   };
 
   window.FBCO_isVisible = function (el) {
