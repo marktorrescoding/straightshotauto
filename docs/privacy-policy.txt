@@ -15,7 +15,7 @@ How We Use Data
 - To improve reliability (basic rate limiting and caching).
 
 Data Sharing
-Listing data is sent to our backend service to generate analysis. We do not sell user data.
+Listing data is sent to our backend service and processed by OpenAI to generate analysis. We do not sell user data.
 
 Data Retention
 Analysis responses may be cached briefly to reduce repeated requests. We do not store user
