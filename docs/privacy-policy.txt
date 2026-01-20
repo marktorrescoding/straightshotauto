@@ -1,0 +1,29 @@
+Car Spotter Privacy Policy
+Effective date: 2026-01-20
+
+Car Spotter analyzes vehicle listing pages on Facebook Marketplace and provides an on-page
+overlay with extracted listing details and AI-generated insights. This policy explains what
+data is handled and how it is used.
+
+Data We Process
+- Website content from the listing page (title, price, mileage, description, specs).
+- The listing URL (to associate the analysis with the current page).
+- Network metadata (e.g., IP address) may be processed by our backend hosting provider for security and rate limiting.
+
+How We Use Data
+- To generate vehicle analysis and insights for the current listing.
+- To improve reliability (basic rate limiting and caching).
+
+Data Sharing
+Listing data is sent to our backend service to generate analysis. We do not sell user data.
+
+Data Retention
+Analysis responses may be cached briefly to reduce repeated requests. We do not store user
+accounts or personal identifiers.
+
+Your Choices
+You can disable or uninstall the extension at any time. The extension runs only on Facebook
+Marketplace item pages.
+
+Contact
+If you have questions, contact us at: your-email@example.com
