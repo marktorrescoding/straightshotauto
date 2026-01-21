@@ -43,9 +43,10 @@
       return;
     }
 
+    const isNewSnapshot = state.lastSnapshotKey && state.lastSnapshotKey !== key;
     state.lastSnapshotKey = key;
     state.analysisLoading = true;
-    if (!state.analysisReady) {
+    if (isNewSnapshot) {
       state.analysisReady = false;
       state.lastAnalysis = null;
     }
@@ -54,10 +55,10 @@
     const seq = state.analysisSeq;
 
     window.FBCO_updateOverlay(vehicle, {
-      loading: !state.analysisReady,
+      loading: true,
       ready: state.analysisReady,
       error: null,
-      data: null
+      data: state.lastAnalysis
     });
 
     try {

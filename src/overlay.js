@@ -721,7 +721,7 @@
     const error = analysisState?.error;
     const data = analysisState?.data;
 
-    const busy = Boolean(loading);
+    const busy = Boolean(loading && !data);
     root.dataset.loading = busy ? "1" : "0";
 
     if (summaryEl) summaryEl.textContent = data?.summary || "(none)";
