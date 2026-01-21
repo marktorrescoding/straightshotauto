@@ -192,6 +192,11 @@
           </div>
 
           <div class="fbco-block">
+            <div class="fbco-label">Deal breakers</div>
+            <ul id="fbco-analysis-dealbreakers" class="fbco-list"></ul>
+          </div>
+
+          <div class="fbco-block">
             <div class="fbco-label">Risk flags</div>
             <ul id="fbco-analysis-risks" class="fbco-list"></ul>
           </div>
@@ -659,6 +664,7 @@
     const checklistEl = document.getElementById("fbco-analysis-checklist");
     const questionsEl = document.getElementById("fbco-analysis-questions");
     const priceEl = document.getElementById("fbco-analysis-price");
+    const dealBreakersEl = document.getElementById("fbco-analysis-dealbreakers");
     const risksEl = document.getElementById("fbco-analysis-risks");
     const scoreValEl = document.getElementById("fbco-score-value");
     const scoreMarkerEl = document.getElementById("fbco-spectrum-marker");
@@ -731,6 +737,7 @@
     renderList(upsidesEl, data?.upsides);
     renderList(checklistEl, data?.inspection_checklist);
     renderList(questionsEl, data?.buyer_questions, null, { clickable: true });
+    renderList(dealBreakersEl, data?.deal_breakers);
     renderList(risksEl, data?.risk_flags);
     renderTags(tagsEl, data?.tags);
     if (marketEl) marketEl.textContent = data?.market_value_estimate || "(estimate)";

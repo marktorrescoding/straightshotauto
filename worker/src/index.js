@@ -145,6 +145,7 @@ function coerceAndFill(raw, snapshot) {
   out.buyer_questions = asArray(raw.buyer_questions).map((s) => asString(s));
 
   out.risk_flags = asArray(raw.risk_flags).map((s) => asString(s));
+  out.deal_breakers = asArray(raw.deal_breakers).map((s) => asString(s));
   out.tags = asArray(raw.tags).map((s) => asString(s)).slice(0, 6);
 
   out.confidence = clamp(asNumber(raw.confidence, 0.5), 0, 1);
@@ -205,6 +206,7 @@ const RESPONSE_SCHEMA = {
       "buyer_questions",
       "overall_score",
       "risk_flags",
+      "deal_breakers",
       "tags",
       "final_verdict",
       "confidence",
@@ -253,6 +255,7 @@ const RESPONSE_SCHEMA = {
       buyer_questions: { type: "array", items: { type: "string" } },
       overall_score: { type: "number" },
       risk_flags: { type: "array", items: { type: "string" } },
+      deal_breakers: { type: "array", items: { type: "string" } },
       tags: { type: "array", items: { type: "string" } },
       final_verdict: { type: "string" },
       confidence: { type: "number" },
@@ -335,24 +338,33 @@ export default {
     const userPrompt = [
       "Analyze this used car listing snapshot and decide whether a buyer should purchase it.",
       "Be specific to THIS year/make/model and this mileage/price. Avoid generic advice.",
+      "Write like an experienced mechanic advising a friend who will actually spend money.",
       "",
       "Snapshot JSON:",
       JSON.stringify(snapshot, null, 2),
       "",
-      "Decision requirements:",
-      "- Say whether this is a good, fair, risky, or avoid purchase, and WHY.",
-      "- Include a realistic maintenance outlook for the NEXT 6–18 months at this mileage.",
-      "- For common issues: only include items you are highly confident apply to this exact year/generation.",
-      "- Do NOT mention CVT issues unless this vehicle is actually known to have a CVT for this year/model.",
-      "- Provide a target buy price range that would make this worth it (given listed issues/uncertainty).",
-      "- Provide upsides (at least 2) if any exist; if none, explain why.",
+      "Requirements:",
+      "- Give a clear recommendation: buy / conditional buy / avoid, and explain the reason in plain language.",
+      "- Calibrate for the make/platform: high-mileage Toyotas are not automatically end-of-life; some platforms are.",
+      "- Provide a realistic 6–18 month maintenance outlook at this mileage (not generic).",
+      "- COMMON ISSUES: only include items you are highly confident apply to this exact year/generation/engine family.",
+      "- Do NOT mention CVT-related issues unless this exact year/model is known to use a CVT.",
       "",
       "Costs:",
       "- estimated_cost_diy and estimated_cost_shop must be realistic ranges like \"$150–$300\" (not single numbers).",
       "",
-      "Scoring consistency:",
-      "- If you say 'walk away', overall_score should usually be <= 34 unless you clearly state a single deal-breaker that must be confirmed.",
-      "- If you say 'good deal/buy', overall_score should usually be >= 55 unless you clearly state strict conditions."
+      "Buyer questions (IMPORTANT):",
+      "- Must be specific to this listing and known platform risks.",
+      "- Do NOT ask generic questions like 'Any issues?' or 'Any accidents?' unless title/history is unclear and you explain why it matters.",
+      "",
+      "Deal-breakers:",
+      "- Include 3–6 deal_breakers: specific symptoms/findings that should make the buyer walk away immediately.",
+      "",
+      "Score/verdict consistency rules:",
+      "- If final_verdict says 'walk away' or 'avoid', overall_score MUST be <= 34 unless you name exactly one deal-breaker that must be confirmed.",
+      "- If overall_score >= 55, final_verdict MUST NOT say 'walk away'—it must be a conditional buy at worst.",
+      "",
+      "Output must match the JSON schema exactly. No extra keys."
     ].join("\n");
 
     // Use JSON schema to improve structure reliability
@@ -391,12 +403,8 @@ export default {
       return jsonResponse({ error: "OpenAI response not JSON", details: rawText.slice(0, 2000) }, origin, 502);
     }
 
-    // Responses API: prefer parsed output; else fallback to output_text
+    // Responses API: prefer output_text; else fallback to first text content
     const content = data?.output?.[0]?.content || [];
-    const parsedDirect =
-      content.find((c) => c?.type === "output_text" && c?.parsed)?.parsed ||
-      content.find((c) => c?.parsed)?.parsed ||
-      null;
     const text =
       data?.output_text ||
       content.find((c) => c?.type === "output_text")?.text ||
@@ -405,7 +413,7 @@ export default {
 
     let parsed = null;
     try {
-      parsed = parsedDirect && typeof parsedDirect === "object" ? parsedDirect : JSON.parse(String(text));
+      parsed = JSON.parse(String(text));
     } catch {
       return jsonResponse({ error: "Failed to parse model response", raw: String(text).slice(0, 4000) }, origin, 502);
     }
