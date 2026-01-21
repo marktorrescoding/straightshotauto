@@ -25,7 +25,7 @@
   "host_permissions": ["https://www.facebook.com/*", "https://car-bot.car-bot.workers.dev/*"],
   "content_scripts": [
     {
-      "matches": ["https://www.facebook.com/marketplace/item/*"],
+      "matches": ["https://www.facebook.com/marketplace/*"],
       "js": ["src/utils.js", "src/extract.js", "src/overlay.js", "content.js"],
       "css": ["styles.css"],
       "run_at": "document_idle"
