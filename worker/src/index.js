@@ -16,7 +16,7 @@ const SYSTEM_PROMPT =
   ].join("\n");
 
 const CACHE_TTL_SECONDS = 60 * 60 * 24;
-const CACHE_VERSION = "v3"; // bump version so old cache doesn't pollute results
+const CACHE_VERSION = "v4"; // bump version so old cache doesn't pollute results
 const RATE_MIN_INTERVAL_MS = 5000;
 const RATE_WINDOW_MS = 60 * 60 * 1000;
 const RATE_MAX_REQUESTS = 30;
@@ -388,6 +388,25 @@ export default {
       "Mileage wording:",
       "- For durable platforms (e.g., 4Runner, Land Cruiser, some Honda/Toyota trucks), 100k–120k is mid-life, not 'high mileage'.",
       "- Use language like 'service interval due' or 'maintenance history matters' instead of 'high mileage' when appropriate.",
+      "",
+      "Lifespan framing (REQUIRED):",
+      "- remaining_lifespan_estimate MUST include Best-case / Average-case / Worst-case.",
+      "- Each case must state the assumption in parentheses.",
+      "- If listing includes an active symptom, Worst-case MUST assume it is a major root cause and be materially shorter.",
+      "- Prefer miles + time when possible (e.g., \"20k–60k miles / 1–3 years\").",
+      "",
+      "Buyer questions format (REQUIRED):",
+      "- Provide 4–7 questions.",
+      "- At least 2 questions MUST name a specific component/system (e.g., PTU, water pump, steering rack, turbo, diff, transfer case).",
+      "- Do NOT include generic questions like 'Any issues?' or 'Any accidents?' unless title/history is missing and you explain why it matters.",
+      "- Each question must include a short why-it-matters note in parentheses (4–8 words).",
+      "  Example: \"Has the PTU fluid ever been changed? (AWD failure point)\"",
+      "",
+      "Risk flags format (REQUIRED):",
+      "- Provide 3–6 risk_flags.",
+      "- Each risk flag MUST include (a) the component/system and (b) the consequence (cost/safety/driveability).",
+      "- Avoid vague flags like 'high mileage' unless paired with a consequence.",
+      "  Example: \"195k miles + AWD → PTU wear risk ($800–$2,000)\"",
       "",
       "Score/verdict consistency rules:",
       "- If final_verdict says 'walk away' or 'avoid', overall_score MUST be <= 34 unless you name exactly one deal-breaker that must be confirmed.",

@@ -378,7 +378,50 @@
     if (!text) return null;
     const cleaned = text.replace(/\s+\n/g, "\n").trim();
     if (!cleaned) return null;
-    return cleaned.length > 1400 ? `${cleaned.slice(0, 1400)}…` : cleaned;
+    return cleaned.length > 4000 ? `${cleaned.slice(0, 4000)}…` : cleaned;
+  }
+
+  function findSectionContainerByHeading(headingRegex) {
+    const els = Array.from(document.querySelectorAll("span, div, h1, h2, h3"))
+      .filter(window.FBCO_isVisible)
+      .slice(0, 5000);
+
+    const headingEl = els.find((el) => {
+      const t = (el.innerText || "").trim();
+      return t && t.length <= 40 && headingRegex.test(t);
+    });
+
+    if (!headingEl) return null;
+
+    let container = headingEl;
+    for (let i = 0; i < 4; i++) {
+      if (!container.parentElement) break;
+      container = container.parentElement;
+      const txt = (container.innerText || "").trim();
+      if (txt && txt.length > 50) return container;
+    }
+
+    return headingEl.parentElement || null;
+  }
+
+  let sellerSeeMoreClicked = false;
+  function expandSellerDescription() {
+    if (sellerSeeMoreClicked) return false;
+    const container =
+      findSectionContainerByHeading(/^Seller'?s\s+description$/i) ||
+      findSectionContainerByHeading(/^Description$/i);
+    if (!container) return false;
+
+    const candidates = Array.from(container.querySelectorAll("button, a, span, div"));
+    const target = candidates.find((el) => {
+      const t = (el.innerText || "").trim();
+      if (!t || t.length > 20) return false;
+      return /^See more$/i.test(t);
+    });
+    if (!target) return false;
+    target.click();
+    sellerSeeMoreClicked = true;
+    return true;
   }
 
   function findMileage() {
@@ -407,6 +450,8 @@
   }
 
   window.FBCO_extractVehicleSnapshot = function () {
+    // Expand seller description once so we can capture full text on next pass.
+    expandSellerDescription();
     const raw = getListingTitleText();
     const parsed = parseYearMakeModel(raw);
 
