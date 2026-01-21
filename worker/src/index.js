@@ -132,6 +132,13 @@ function coerceAndFill(raw, snapshot) {
     estimated_cost_diy: asString(x?.estimated_cost_diy),
     estimated_cost_shop: asString(x?.estimated_cost_shop)
   }));
+  out.wear_items = asArray(raw.wear_items).map((x) => ({
+    item: asString(x?.item),
+    typical_mileage_range: asString(x?.typical_mileage_range),
+    why_it_matters: asString(x?.why_it_matters),
+    estimated_cost_diy: asString(x?.estimated_cost_diy),
+    estimated_cost_shop: asString(x?.estimated_cost_shop)
+  }));
 
   out.remaining_lifespan_estimate = asString(raw.remaining_lifespan_estimate);
   out.market_value_estimate = asString(raw.market_value_estimate);
@@ -196,6 +203,7 @@ const RESPONSE_SCHEMA = {
       "year_model_reputation",
       "expected_maintenance_near_term",
       "common_issues",
+      "wear_items",
       "remaining_lifespan_estimate",
       "market_value_estimate",
       "price_opinion",
@@ -240,6 +248,21 @@ const RESPONSE_SCHEMA = {
             issue: { type: "string" },
             typical_failure_mileage: { type: "string" },
             severity: { type: "string" },
+            estimated_cost_diy: { type: "string" },
+            estimated_cost_shop: { type: "string" }
+          }
+        }
+      },
+      wear_items: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["item", "typical_mileage_range", "why_it_matters", "estimated_cost_diy", "estimated_cost_shop"],
+          properties: {
+            item: { type: "string" },
+            typical_mileage_range: { type: "string" },
+            why_it_matters: { type: "string" },
             estimated_cost_diy: { type: "string" },
             estimated_cost_shop: { type: "string" }
           }
@@ -348,6 +371,8 @@ export default {
       "- Calibrate for the make/platform: high-mileage Toyotas are not automatically end-of-life; some platforms are.",
       "- Provide a realistic 6–18 month maintenance outlook at this mileage (not generic).",
       "- COMMON ISSUES: only include items you are highly confident apply to this exact year/generation/engine family.",
+      "- Do NOT label generic wear items (brakes, tires, suspension wear) as common issues. Put them under wear_items.",
+      "- If no platform-known issues are highly confident, common_issues should be an empty array.",
       "- Do NOT mention CVT-related issues unless this exact year/model is known to use a CVT.",
       "",
       "Costs:",
@@ -359,6 +384,10 @@ export default {
       "",
       "Deal-breakers:",
       "- Include 3–6 deal_breakers: specific symptoms/findings that should make the buyer walk away immediately.",
+      "",
+      "Mileage wording:",
+      "- For durable platforms (e.g., 4Runner, Land Cruiser, some Honda/Toyota trucks), 100k–120k is mid-life, not 'high mileage'.",
+      "- Use language like 'service interval due' or 'maintenance history matters' instead of 'high mileage' when appropriate.",
       "",
       "Score/verdict consistency rules:",
       "- If final_verdict says 'walk away' or 'avoid', overall_score MUST be <= 34 unless you name exactly one deal-breaker that must be confirmed.",

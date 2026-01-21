@@ -167,6 +167,11 @@
           </div>
 
           <div class="fbco-block">
+            <div class="fbco-label">Wear items to expect</div>
+            <ul id="fbco-analysis-wear" class="fbco-list"></ul>
+          </div>
+
+          <div class="fbco-block">
             <div class="fbco-label">Upsides</div>
             <ul id="fbco-analysis-upsides" class="fbco-list"></ul>
           </div>
@@ -660,6 +665,7 @@
     const summaryEl = document.getElementById("fbco-summary");
     const vehicleTitleEl = document.getElementById("fbco-vehicle-title");
     const issuesEl = document.getElementById("fbco-analysis-issues");
+    const wearEl = document.getElementById("fbco-analysis-wear");
     const upsidesEl = document.getElementById("fbco-analysis-upsides");
     const checklistEl = document.getElementById("fbco-analysis-checklist");
     const questionsEl = document.getElementById("fbco-analysis-questions");
@@ -734,6 +740,7 @@
 
     renderList(maintenanceEl, data?.expected_maintenance_near_term, stringifyMaintenance);
     renderList(issuesEl, data?.common_issues, stringifyIssue);
+    renderList(wearEl, data?.wear_items, stringifyMaintenance);
     renderList(upsidesEl, data?.upsides);
     renderList(checklistEl, data?.inspection_checklist);
     renderList(questionsEl, data?.buyer_questions, null, { clickable: true });
