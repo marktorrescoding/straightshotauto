@@ -123,7 +123,42 @@
           </div>
 
           <div class="fbco-block">
+            <div class="fbco-label">Summary</div>
+            <div id="fbco-summary" class="fbco-text">(none)</div>
+          </div>
+
+          <div class="fbco-block">
+            <div class="fbco-label">Final verdict</div>
+            <div id="fbco-final-verdict" class="fbco-text">(none)</div>
+          </div>
+
+          <div class="fbco-block">
+            <div class="fbco-label">Year/model reputation</div>
+            <div id="fbco-year-rep" class="fbco-text">(none)</div>
+          </div>
+
+          <div class="fbco-block">
+            <div class="fbco-label">Remaining lifespan</div>
+            <div id="fbco-lifespan" class="fbco-text">(none)</div>
+          </div>
+
+          <div class="fbco-block">
+            <div class="fbco-label">Daily vs project</div>
+            <div id="fbco-daily-project" class="fbco-text">(none)</div>
+          </div>
+
+          <div class="fbco-block">
+            <div class="fbco-label">Mechanical skill</div>
+            <div id="fbco-skill" class="fbco-text">(none)</div>
+          </div>
+
+          <div class="fbco-block">
             <div id="fbco-analysis-tags" class="fbco-tags"></div>
+          </div>
+
+          <div class="fbco-block">
+            <div class="fbco-label">Likely maintenance</div>
+            <ul id="fbco-analysis-maintenance" class="fbco-list"></ul>
           </div>
 
           <div class="fbco-block">
@@ -169,11 +204,6 @@
           </div>
 
           <div id="fbco-details-section" class="fbco-collapsible" data-collapsed="1">
-            <div class="fbco-row fbco-row-wide">
-              <div class="fbco-label">Summary</div>
-              <div class="fbco-val"><span id="fbco-summary" class="fbco-value">(none)</span></div>
-            </div>
-
             <div class="fbco-row">
               <div class="fbco-label">Parsed</div>
               <div class="fbco-val"><span id="fbco-parsed-value" class="fbco-value">Detecting…</span></div>
@@ -266,7 +296,7 @@
     const setIcons = () => {
       try {
         const runtime = globalThis.chrome?.runtime;
-        if (!runtime?.getURL || !runtime?.id) return;
+        if (!runtime?.getURL) return;
         const iconUrl = runtime.getURL("assets/icon48.png");
         if (titleIcon) titleIcon.src = iconUrl;
         if (miniIcon) miniIcon.src = iconUrl;
@@ -500,9 +530,24 @@
     if (typeof issue === "string") return issue;
     const parts = [];
     if (issue.issue) parts.push(issue.issue);
+    if (issue.typical_failure_mileage) parts.push(`Mileage: ${issue.typical_failure_mileage}`);
     if (issue.severity) parts.push(`Severity: ${issue.severity}`);
+    if (issue.estimated_cost_diy) parts.push(`DIY: ${issue.estimated_cost_diy}`);
+    if (issue.estimated_cost_shop) parts.push(`Shop: ${issue.estimated_cost_shop}`);
     if (issue.estimated_cost) parts.push(`Cost: ${issue.estimated_cost}`);
     if (issue.cost_range) parts.push(`Cost: ${issue.cost_range}`);
+    return parts.length ? parts.join(" • ") : null;
+  }
+
+  function stringifyMaintenance(item) {
+    if (!item) return null;
+    if (typeof item === "string") return item;
+    const parts = [];
+    if (item.item) parts.push(item.item);
+    if (item.typical_mileage_range) parts.push(`Mileage: ${item.typical_mileage_range}`);
+    if (item.why_it_matters) parts.push(item.why_it_matters);
+    if (item.estimated_cost_diy) parts.push(`DIY: ${item.estimated_cost_diy}`);
+    if (item.estimated_cost_shop) parts.push(`Shop: ${item.estimated_cost_shop}`);
     return parts.length ? parts.join(" • ") : null;
   }
 
@@ -619,6 +664,12 @@
     const scoreMarkerEl = document.getElementById("fbco-spectrum-marker");
     const tagsEl = document.getElementById("fbco-analysis-tags");
     const marketEl = document.getElementById("fbco-analysis-market");
+    const maintenanceEl = document.getElementById("fbco-analysis-maintenance");
+    const finalVerdictEl = document.getElementById("fbco-final-verdict");
+    const yearRepEl = document.getElementById("fbco-year-rep");
+    const lifespanEl = document.getElementById("fbco-lifespan");
+    const dailyProjectEl = document.getElementById("fbco-daily-project");
+    const skillEl = document.getElementById("fbco-skill");
 
     if (parsedValEl) parsedValEl.textContent = vehicle.normalized || "Not found";
     if (rawValEl) rawValEl.textContent = vehicle.source_text || "(not found)";
@@ -658,6 +709,11 @@
     root.dataset.loading = busy ? "1" : "0";
 
     if (summaryEl) summaryEl.textContent = data?.summary || "(none)";
+    if (finalVerdictEl) finalVerdictEl.textContent = data?.final_verdict || "(none)";
+    if (yearRepEl) yearRepEl.textContent = data?.year_model_reputation || "(none)";
+    if (lifespanEl) lifespanEl.textContent = data?.remaining_lifespan_estimate || "(none)";
+    if (dailyProjectEl) dailyProjectEl.textContent = data?.daily_driver_vs_project || "(none)";
+    if (skillEl) skillEl.textContent = data?.mechanical_skill_required || "(none)";
     if (vehicleTitleEl) {
       if (vehicle?.year && vehicle?.make) {
         const name = [vehicle.year, vehicle.make, vehicle.model].filter(Boolean).join(" ");
@@ -670,6 +726,7 @@
       }
     }
 
+    renderList(maintenanceEl, data?.expected_maintenance_near_term, stringifyMaintenance);
     renderList(issuesEl, data?.common_issues, stringifyIssue);
     renderList(upsidesEl, data?.upsides);
     renderList(checklistEl, data?.inspection_checklist);

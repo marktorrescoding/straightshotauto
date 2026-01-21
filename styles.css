@@ -132,6 +132,14 @@
   white-space: nowrap;
 }
 
+#fb-car-overlay-mvp .fbco-text {
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(0,0,0,0.04);
+  white-space: normal;
+  line-height: 1.35;
+}
+
 #fb-car-overlay-mvp .fbco-divider {
   height: 1px;
   background: rgba(0,0,0,0.08);

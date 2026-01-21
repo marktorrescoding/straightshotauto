@@ -1,12 +1,22 @@
 const SYSTEM_PROMPT =
-  "You analyze used car listings and return a concise, structured JSON response for a buyer. " +
-  "Be specific to the exact year/make/model and avoid generic advice. " +
-  "Common issues must be relevant to that year/generation (no broad make-wide issues). " +
-  "If data is missing, make conservative assumptions and mention it in notes. " +
-  "Return only valid JSON.";
+  [
+    "You are an experienced used-car evaluator and mechanic.",
+    "Your job: help a buyer decide whether to buy a specific used car listing.",
+    "Be direct, practical, and specific to the exact year/make/model + mileage + seller notes.",
+    "",
+    "Hard rules:",
+    "- Do NOT invent facts (recalls, failures, pricing) if you are not confident. Use 'unknown' or omit that issue.",
+    "- Do NOT assume CVT. Only mention CVT-related risks if that year/model is actually known to use a CVT.",
+    "- Do NOT label something a 'well-known issue' unless you are highly confident for that exact year/generation.",
+    "- Calibrate for brand/platform: a high-mileage Toyota is not automatically end-of-life; some vehicles routinely exceed 200k+.",
+    "- Keep the verdict aligned with the score (e.g., do not say 'walk away' with a 'Fair/Good' score).",
+    "- If data is missing (trim/engine/transmission/drivetrain/service history), explicitly state how uncertainty affects confidence.",
+    "",
+    "Output MUST be valid JSON that matches the schema exactly. No markdown, no extra keys."
+  ].join("\n");
 
 const CACHE_TTL_SECONDS = 60 * 60 * 24;
-const CACHE_VERSION = "v2";
+const CACHE_VERSION = "v3"; // bump version so old cache doesn't pollute results
 const RATE_MIN_INTERVAL_MS = 5000;
 const RATE_WINDOW_MS = 60 * 60 * 1000;
 const RATE_MAX_REQUESTS = 30;
@@ -46,12 +56,10 @@ function checkRateLimit(ip) {
   const now = Date.now();
   const entry = rateState.get(ip) || { last: 0, recent: [] };
 
-  // Hard minimum interval
   if (entry.last && now - entry.last < RATE_MIN_INTERVAL_MS) {
     return { ok: false, retryAfterMs: RATE_MIN_INTERVAL_MS - (now - entry.last) };
   }
 
-  // Sliding window
   entry.recent = entry.recent.filter((t) => now - t < RATE_WINDOW_MS);
   if (entry.recent.length >= RATE_MAX_REQUESTS) {
     const earliest = entry.recent[0];
@@ -70,6 +78,188 @@ async function hashString(input) {
   const hashArray = Array.from(new Uint8Array(hashBuffer));
   return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
 }
+
+function clamp(n, min, max) {
+  return Math.min(Math.max(n, min), max);
+}
+
+function asString(v, fallback = "unknown") {
+  if (typeof v === "string" && v.trim()) return v.trim();
+  return fallback;
+}
+
+function asNumber(v, fallback = null) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function asArray(v) {
+  return Array.isArray(v) ? v : [];
+}
+
+function verdictFromScore(score) {
+  if (!Number.isFinite(score)) return "unknown";
+  if (score <= 14) return "❌ No";
+  if (score <= 34) return "⚠️ Risky";
+  if (score <= 54) return "⚖️ Fair";
+  if (score <= 71) return "👍 Good";
+  if (score <= 87) return "💎 Great";
+  return "🚀 Steal";
+}
+
+/**
+ * Coerce/fill required output so UI doesn't break even if the model slips.
+ * Also enforces some consistency constraints.
+ */
+function coerceAndFill(raw, snapshot) {
+  const out = {};
+
+  out.summary = asString(raw.summary);
+  out.year_model_reputation = asString(raw.year_model_reputation);
+
+  out.expected_maintenance_near_term = asArray(raw.expected_maintenance_near_term).map((x) => ({
+    item: asString(x?.item),
+    typical_mileage_range: asString(x?.typical_mileage_range),
+    why_it_matters: asString(x?.why_it_matters),
+    estimated_cost_diy: asString(x?.estimated_cost_diy),
+    estimated_cost_shop: asString(x?.estimated_cost_shop)
+  }));
+
+  out.common_issues = asArray(raw.common_issues).map((x) => ({
+    issue: asString(x?.issue),
+    typical_failure_mileage: asString(x?.typical_failure_mileage),
+    severity: asString(x?.severity),
+    estimated_cost_diy: asString(x?.estimated_cost_diy),
+    estimated_cost_shop: asString(x?.estimated_cost_shop)
+  }));
+
+  out.remaining_lifespan_estimate = asString(raw.remaining_lifespan_estimate);
+  out.market_value_estimate = asString(raw.market_value_estimate);
+  out.price_opinion = asString(raw.price_opinion);
+
+  out.mechanical_skill_required = asString(raw.mechanical_skill_required);
+  out.daily_driver_vs_project = asString(raw.daily_driver_vs_project);
+
+  out.upsides = asArray(raw.upsides).map((s) => asString(s)).filter((s) => s !== "unknown");
+  out.inspection_checklist = asArray(raw.inspection_checklist).map((s) => asString(s));
+  out.buyer_questions = asArray(raw.buyer_questions).map((s) => asString(s));
+
+  out.risk_flags = asArray(raw.risk_flags).map((s) => asString(s));
+  out.tags = asArray(raw.tags).map((s) => asString(s)).slice(0, 6);
+
+  out.confidence = clamp(asNumber(raw.confidence, 0.5), 0, 1);
+
+  // Score: prefer model score, else derive from confidence (but don't overwrite a valid score)
+  let score = asNumber(raw.overall_score, null);
+  if (score == null) score = Math.round(out.confidence * 100);
+  out.overall_score = clamp(Math.round(score), 0, 100);
+
+  out.final_verdict = asString(raw.final_verdict);
+
+  // Ensure verdict/score consistency if model gives something contradictory
+  // (We don't rewrite the entire verdict, but we can add a clarifier.)
+  const scoreBand = verdictFromScore(out.overall_score);
+  const verdictLower = (out.final_verdict || "").toLowerCase();
+  const saysWalkAway = verdictLower.includes("walk away") || verdictLower.includes("avoid");
+  const saysBuy =
+    verdictLower.includes("buy") || verdictLower.includes("good deal") || verdictLower.includes("worth it");
+
+  if (saysWalkAway && out.overall_score >= 55) {
+    out.final_verdict = `${out.final_verdict} (Note: score suggests ${scoreBand}; if walking away, specify the deal-breaker found during inspection.)`;
+  } else if (saysBuy && out.overall_score <= 34) {
+    out.final_verdict = `${out.final_verdict} (Note: score suggests ${scoreBand}; if buying anyway, it should be only at a steep discount and with clear acceptance of risk.)`;
+  }
+
+  out.notes = asString(raw.notes, "");
+
+  // Small helpful note when key fields are missing
+  const missing = [];
+  if (!snapshot?.price_usd) missing.push("price");
+  if (!snapshot?.mileage_miles) missing.push("mileage");
+  if (!snapshot?.seller_description) missing.push("seller_description");
+  if (missing.length) {
+    const m = `Missing listing info: ${missing.join(", ")}. This reduces confidence.`;
+    out.notes = out.notes ? `${out.notes} ${m}` : m;
+  }
+
+  return out;
+}
+
+const RESPONSE_SCHEMA = {
+  name: "used_car_analysis",
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "summary",
+      "year_model_reputation",
+      "expected_maintenance_near_term",
+      "common_issues",
+      "remaining_lifespan_estimate",
+      "market_value_estimate",
+      "price_opinion",
+      "mechanical_skill_required",
+      "daily_driver_vs_project",
+      "upsides",
+      "inspection_checklist",
+      "buyer_questions",
+      "overall_score",
+      "risk_flags",
+      "tags",
+      "final_verdict",
+      "confidence",
+      "notes"
+    ],
+    properties: {
+      summary: { type: "string" },
+      year_model_reputation: { type: "string" },
+      expected_maintenance_near_term: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["item", "typical_mileage_range", "why_it_matters", "estimated_cost_diy", "estimated_cost_shop"],
+          properties: {
+            item: { type: "string" },
+            typical_mileage_range: { type: "string" },
+            why_it_matters: { type: "string" },
+            estimated_cost_diy: { type: "string" },
+            estimated_cost_shop: { type: "string" }
+          }
+        }
+      },
+      common_issues: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["issue", "typical_failure_mileage", "severity", "estimated_cost_diy", "estimated_cost_shop"],
+          properties: {
+            issue: { type: "string" },
+            typical_failure_mileage: { type: "string" },
+            severity: { type: "string" },
+            estimated_cost_diy: { type: "string" },
+            estimated_cost_shop: { type: "string" }
+          }
+        }
+      },
+      remaining_lifespan_estimate: { type: "string" },
+      market_value_estimate: { type: "string" },
+      price_opinion: { type: "string" },
+      mechanical_skill_required: { type: "string" },
+      daily_driver_vs_project: { type: "string" },
+      upsides: { type: "array", items: { type: "string" } },
+      inspection_checklist: { type: "array", items: { type: "string" } },
+      buyer_questions: { type: "array", items: { type: "string" } },
+      overall_score: { type: "number" },
+      risk_flags: { type: "array", items: { type: "string" } },
+      tags: { type: "array", items: { type: "string" } },
+      final_verdict: { type: "string" },
+      confidence: { type: "number" },
+      notes: { type: "string" }
+    }
+  }
+};
 
 export default {
   async fetch(request, env, ctx) {
@@ -108,19 +298,13 @@ export default {
     };
 
     if (!snapshot.year || !snapshot.make) {
-      return jsonResponse(
-        {
-          error: "Missing required fields",
-          required: ["year", "make"]
-        },
-        origin,
-        400
-      );
+      return jsonResponse({ error: "Missing required fields", required: ["year", "make"] }, origin, 400);
     }
 
     const snapshotKey = await hashString(JSON.stringify(snapshot));
     const cacheKey = new Request(`https://cache.car-bot.local/analyze/${CACHE_VERSION}/${snapshotKey}`);
     const cache = caches.default;
+
     const cached = await cache.match(cacheKey);
     if (cached) {
       const withCors = new Response(cached.body, cached);
@@ -133,56 +317,45 @@ export default {
     const rate = checkRateLimit(ip);
     if (!rate.ok) {
       const retryAfter = Math.max(1, Math.ceil((rate.retryAfterMs || 0) / 1000));
-      return new Response(
-        JSON.stringify({ error: "Rate limited", retry_after_seconds: retryAfter }),
-        {
-          status: 429,
-          headers: {
-            "Content-Type": "application/json",
-            "Retry-After": String(retryAfter),
-            ...corsHeaders(origin)
-          }
+      return new Response(JSON.stringify({ error: "Rate limited", retry_after_seconds: retryAfter }), {
+        status: 429,
+        headers: {
+          "Content-Type": "application/json",
+          "Retry-After": String(retryAfter),
+          ...corsHeaders(origin)
         }
-      );
+      });
     }
 
     if (!env.OPENAI_API_KEY) {
       return jsonResponse({ error: "Server missing OPENAI_API_KEY" }, origin, 500);
     }
 
+    // Prompt: forces specificity + practical guidance + avoids CVT assumptions
     const userPrompt = [
-      "Vehicle snapshot:",
+      "Analyze this used car listing snapshot and decide whether a buyer should purchase it.",
+      "Be specific to THIS year/make/model and this mileage/price. Avoid generic advice.",
+      "",
+      "Snapshot JSON:",
       JSON.stringify(snapshot, null, 2),
       "",
-      "Return JSON with keys:",
-      "summary (string),",
-      "common_issues (array of {issue, severity, estimated_cost}),",
-      "upsides (array of strings),",
-      "inspection_checklist (array of strings),",
-      "buyer_questions (array of strings),",
-      "market_value_estimate (string, e.g. \"$18,000–$21,000\"),",
-      "price_opinion (string),",
-      "overall_score (number 0-100),",
-      "risk_flags (array of strings),",
-      "tags (array of emoji-labeled short strings),",
-      "confidence (number 0-1),",
-      "notes (string, optional).",
+      "Decision requirements:",
+      "- Say whether this is a good, fair, risky, or avoid purchase, and WHY.",
+      "- Include a realistic maintenance outlook for the NEXT 6–18 months at this mileage.",
+      "- For common issues: only include items you are highly confident apply to this exact year/generation.",
+      "- Do NOT mention CVT issues unless this vehicle is actually known to have a CVT for this year/model.",
+      "- Provide a target buy price range that would make this worth it (given listed issues/uncertainty).",
+      "- Provide upsides (at least 2) if any exist; if none, explain why.",
       "",
-      "Overall score guidance (0-100):",
-      "0-14 = ❌ No, 15-34 = ⚠️ Risky, 35-54 = ⚖️ Fair, 55-71 = 👍 Good, 72-87 = 💎 Great, 88-100 = 🚀 Steal.",
-      "Use price vs mileage, known issues, title status, and missing info to pick a score.",
-      "Tag examples: 🔧 Money pit in disguise, 🚨 Fixer-upper (emphasis on fixer), ⚠️ Budget for repairs, ✅ Mechanically reasonable, 💪 Known for going forever, 🏆 Buy it and forget about it.",
-      "If there is a strong case to negotiate, add one extra buyer question prefixed with \"$\" that suggests a reasonable offer based on needed repairs or red flags.",
-      "Do not replace other questions. If referencing issues not stated by the seller, explicitly say they are common for this year/model and make the question conditional (e.g., \"If you know about X...\").",
-      "Inspection checks must be DIY-friendly (what an average buyer can do on-site without tools): test drive behavior, listen for noises, check lights, inspect fluids, check for leaks, check tires/brakes visually, verify warning lights.",
-      "Buyer questions must be specific to the seller's description; avoid generic questions already answered.",
-      "Do not ask about clutch replacement or major repairs unless the seller text indicates a problem or heavy wear.",
-      "If electrical issues are mentioned, ask targeted follow-ups (e.g., which codes, how often, any diagnostics done).",
-      "Common issues should be listed only if they are explicitly mentioned by the seller or are well-known for that exact year/generation. If unsure, omit.",
-      "Negotiation questions must cite seller-provided issues or clearly state they are common for this year/model with typical mileage context.",
-      "If the seller did not mention the issue, the negotiation question must include the context in the question itself (e.g., \"On a 2012 Pilot, transmission issues can show up around 140k+ miles; if that applies here, would you consider...\")."
+      "Costs:",
+      "- estimated_cost_diy and estimated_cost_shop must be realistic ranges like \"$150–$300\" (not single numbers).",
+      "",
+      "Scoring consistency:",
+      "- If you say 'walk away', overall_score should usually be <= 34 unless you clearly state a single deal-breaker that must be confirmed.",
+      "- If you say 'good deal/buy', overall_score should usually be >= 55 unless you clearly state strict conditions."
     ].join("\n");
 
+    // Use JSON schema to improve structure reliability
     const openaiRes = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
@@ -191,8 +364,14 @@ export default {
       },
       body: JSON.stringify({
         model: "gpt-4o-mini",
-        temperature: 0.3,
-        text: { format: { type: "json_object" } },
+        temperature: 0.25,
+        text: {
+          format: {
+            type: "json_schema",
+            name: RESPONSE_SCHEMA.name,
+            schema: RESPONSE_SCHEMA.schema
+          }
+        },
         input: [
           { role: "system", content: [{ type: "input_text", text: SYSTEM_PROMPT }] },
           { role: "user", content: [{ type: "input_text", text: userPrompt }] }
@@ -202,49 +381,40 @@ export default {
 
     const rawText = await openaiRes.text();
     if (!openaiRes.ok) {
-      return jsonResponse(
-        { error: "OpenAI error", status: openaiRes.status, details: rawText },
-        origin,
-        502
-      );
+      return jsonResponse({ error: "OpenAI error", status: openaiRes.status, details: rawText }, origin, 502);
     }
 
     let data = null;
     try {
       data = JSON.parse(rawText);
     } catch {
-      return jsonResponse(
-        { error: "OpenAI response not JSON", details: rawText.slice(0, 2000) },
-        origin,
-        502
-      );
+      return jsonResponse({ error: "OpenAI response not JSON", details: rawText.slice(0, 2000) }, origin, 502);
     }
 
+    // Responses API: prefer parsed output; else fallback to output_text
+    const content = data?.output?.[0]?.content || [];
+    const parsedDirect =
+      content.find((c) => c?.type === "output_text" && c?.parsed)?.parsed ||
+      content.find((c) => c?.parsed)?.parsed ||
+      null;
     const text =
       data?.output_text ||
-      data?.output?.[0]?.content?.[0]?.text ||
-      data?.output?.[0]?.content?.[0]?.text?.value ||
+      content.find((c) => c?.type === "output_text")?.text ||
+      content[0]?.text ||
       "";
 
+    let parsed = null;
     try {
-      const parsed = JSON.parse(text);
-      if (!Number.isFinite(Number(parsed?.overall_score)) && Number.isFinite(Number(parsed?.confidence))) {
-        parsed.overall_score = Math.round(Number(parsed.confidence) * 100);
-      }
-      const res = jsonResponse(parsed, origin, 200);
-      res.headers.set("X-Cache", "MISS");
-      ctx?.waitUntil?.(cache.put(cacheKey, res.clone()));
-      return res;
+      parsed = parsedDirect && typeof parsedDirect === "object" ? parsedDirect : JSON.parse(String(text));
     } catch {
-      return jsonResponse(
-        {
-          error: "Failed to parse model response",
-          raw: text,
-          debug: { has_output_text: Boolean(data?.output_text) }
-        },
-        origin,
-        502
-      );
+      return jsonResponse({ error: "Failed to parse model response", raw: String(text).slice(0, 4000) }, origin, 502);
     }
+
+    const final = coerceAndFill(parsed, snapshot);
+    const res = jsonResponse(final, origin, 200);
+    res.headers.set("X-Cache", "MISS");
+
+    ctx?.waitUntil?.(cache.put(cacheKey, res.clone()));
+    return res;
   }
 };
