@@ -107,7 +107,10 @@
           <div class="fbco-spectrum fbco-spectrum-top">
             <div class="fbco-spectrum-header">
               <div class="fbco-spectrum-label">Overall rating</div>
-              <div id="fbco-score-value" class="fbco-score-value">--</div>
+              <div class="fbco-spectrum-values">
+                <div id="fbco-score-value" class="fbco-score-value">--</div>
+                <div id="fbco-confidence" class="fbco-confidence">Confidence: --</div>
+              </div>
             </div>
             <div class="fbco-spectrum-bar">
               <div id="fbco-spectrum-marker" class="fbco-spectrum-marker"></div>
@@ -674,6 +677,7 @@
     const risksEl = document.getElementById("fbco-analysis-risks");
     const scoreValEl = document.getElementById("fbco-score-value");
     const scoreMarkerEl = document.getElementById("fbco-spectrum-marker");
+    const confidenceEl = document.getElementById("fbco-confidence");
     const tagsEl = document.getElementById("fbco-analysis-tags");
     const marketEl = document.getElementById("fbco-analysis-market");
     const maintenanceEl = document.getElementById("fbco-analysis-maintenance");
@@ -765,6 +769,12 @@
         scoreValEl.textContent = label ? `${label} (${clamped}/100)` : `${clamped}/100`;
         scoreMarkerEl.style.left = `${clamped}%`;
       }
+    }
+
+    if (confidenceEl) {
+      const conf =
+        Number.isFinite(Number(data?.confidence)) ? Math.round(Number(data?.confidence) * 100) : null;
+      confidenceEl.textContent = conf == null ? "Confidence: --" : `Confidence: ${conf}%`;
     }
   };
 })();

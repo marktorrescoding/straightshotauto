@@ -16,7 +16,7 @@ const SYSTEM_PROMPT =
   ].join("\n");
 
 const CACHE_TTL_SECONDS = 60 * 60 * 24;
-const CACHE_VERSION = "v4"; // bump version so old cache doesn't pollute results
+const CACHE_VERSION = "v5"; // bump version so old cache doesn't pollute results
 const RATE_MIN_INTERVAL_MS = 5000;
 const RATE_WINDOW_MS = 60 * 60 * 1000;
 const RATE_MAX_REQUESTS = 30;
@@ -401,6 +401,17 @@ export default {
       "- Do NOT include generic questions like 'Any issues?' or 'Any accidents?' unless title/history is missing and you explain why it matters.",
       "- Each question must include a short why-it-matters note in parentheses (4–8 words).",
       "  Example: \"Has the PTU fluid ever been changed? (AWD failure point)\"",
+      "",
+      "Engine specificity (REQUIRED):",
+      "- If engine/variant is unknown and materially affects reliability, explicitly state how each plausible engine changes risk.",
+      "- Example: \"If 3.5L EcoBoost: timing chain/turbo risk increases after 120k; if 5.0L V8: valvetrain/oil consumption more relevant.\"",
+      "- Use this uncertainty to adjust confidence and risk_flags.",
+      "",
+      "Common issues empty handling:",
+      "- If common_issues is empty, briefly explain why in year_model_reputation or notes.",
+      "",
+      "Completed service handling:",
+      "- If the seller explicitly states a service was completed recently, reflect that and shift focus to the NEXT interval.",
       "",
       "Risk flags format (REQUIRED):",
       "- Provide 3–6 risk_flags.",
