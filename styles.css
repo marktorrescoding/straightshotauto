@@ -102,7 +102,7 @@
   font-size: 13px;
   color: rgba(0,0,0,0.85);
   display: grid;
-  gap: 12px;
+  gap: 14px;
 }
 
 #fb-car-overlay-mvp .fbco-vehicle-title {
@@ -215,6 +215,13 @@
 #fb-car-overlay-mvp .fbco-meta-item strong {
   font-size: 13px;
   color: rgba(0,0,0,0.9);
+}
+
+#fb-car-overlay-mvp .fbco-assumption {
+  margin-top: 8px;
+  font-size: 11px;
+  color: rgba(0,0,0,0.55);
+  line-height: 1.3;
 }
 
 #fb-car-overlay-mvp .fbco-confidence-bar {
@@ -406,6 +413,33 @@
 #fb-car-overlay-mvp .fbco-list li {
   margin-bottom: 6px;
   line-height: 1.3;
+}
+
+#fb-car-overlay-mvp .fbco-list-risk,
+#fb-car-overlay-mvp .fbco-list-deal,
+#fb-car-overlay-mvp .fbco-list-good {
+  list-style: none;
+  padding-left: 0;
+}
+
+#fb-car-overlay-mvp .fbco-list-risk li,
+#fb-car-overlay-mvp .fbco-list-deal li,
+#fb-car-overlay-mvp .fbco-list-good li {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+#fb-car-overlay-mvp .fbco-list-risk li::before {
+  content: "⚠️";
+}
+
+#fb-car-overlay-mvp .fbco-list-deal li::before {
+  content: "🛑";
+}
+
+#fb-car-overlay-mvp .fbco-list-good li::before {
+  content: "✅";
 }
 
 #fb-car-overlay-mvp .fbco-list-pill {

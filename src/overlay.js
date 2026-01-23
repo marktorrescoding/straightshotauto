@@ -123,6 +123,7 @@
               <div class="fbco-badges">
                 <span id="fbco-score-badge" class="fbco-badge">--</span>
                 <span id="fbco-confidence-badge" class="fbco-badge fbco-badge-muted">--</span>
+                <span id="fbco-verdict-badge" class="fbco-badge fbco-badge-muted">Verdict</span>
               </div>
             </div>
             <div class="fbco-meta-row">
@@ -139,6 +140,9 @@
                 <strong id="fbco-meta-title-status">—</strong>
               </div>
             </div>
+            <div class="fbco-assumption" id="fbco-assumption">
+              This assessment assumes no major undisclosed damage. A pre-purchase inspection is still recommended.
+            </div>
             <div class="fbco-summary-block" id="fbco-summary-block">
               <div class="fbco-section-label">Summary</div>
               <div id="fbco-summary" class="fbco-text">—</div>
@@ -150,6 +154,16 @@
           </div>
 
           <div class="fbco-tags" id="fbco-analysis-tags"></div>
+
+          <div class="fbco-accordion" id="fbco-acc-upsides">
+            <button class="fbco-accordion-toggle" type="button" data-target="fbco-upsides-body" aria-expanded="false">
+              <span>✅ Upsides</span>
+              <span class="fbco-accordion-icon">▾</span>
+            </button>
+            <div id="fbco-upsides-body" class="fbco-accordion-body" hidden>
+              <ul id="fbco-analysis-upsides" class="fbco-list fbco-list-good"></ul>
+            </div>
+          </div>
 
           <div class="fbco-accordion" id="fbco-acc-overview">
             <button class="fbco-accordion-toggle" type="button" data-target="fbco-overview-body" aria-expanded="false">
@@ -212,21 +226,21 @@
 
           <div class="fbco-accordion" id="fbco-acc-risk">
             <button class="fbco-accordion-toggle" type="button" data-target="fbco-risk-body" aria-expanded="false">
-              <span>Risk flags</span>
+              <span>⚠️ Risk flags</span>
               <span class="fbco-accordion-icon">▾</span>
             </button>
             <div id="fbco-risk-body" class="fbco-accordion-body" hidden>
-              <ul id="fbco-analysis-risks" class="fbco-list"></ul>
+              <ul id="fbco-analysis-risks" class="fbco-list fbco-list-risk"></ul>
             </div>
           </div>
 
           <div class="fbco-accordion" id="fbco-acc-deal">
             <button class="fbco-accordion-toggle" type="button" data-target="fbco-deal-body" aria-expanded="false">
-              <span>Deal breakers</span>
+              <span>🛑 Deal breakers</span>
               <span class="fbco-accordion-icon">▾</span>
             </button>
             <div id="fbco-deal-body" class="fbco-accordion-body" hidden>
-              <ul id="fbco-analysis-dealbreakers" class="fbco-list"></ul>
+              <ul id="fbco-analysis-dealbreakers" class="fbco-list fbco-list-deal"></ul>
             </div>
           </div>
 
@@ -800,6 +814,7 @@
     const metaMileageEl = document.getElementById("fbco-meta-mileage");
     const metaTitleEl = document.getElementById("fbco-meta-title-status");
     const issuesEl = document.getElementById("fbco-analysis-issues");
+    const upsidesEl = document.getElementById("fbco-analysis-upsides");
     const wearEl = document.getElementById("fbco-analysis-wear");
     const checklistEl = document.getElementById("fbco-analysis-checklist");
     const questionsEl = document.getElementById("fbco-analysis-questions");
@@ -808,6 +823,7 @@
     const risksEl = document.getElementById("fbco-analysis-risks");
     const scoreBadgeEl = document.getElementById("fbco-score-badge");
     const confidenceBadgeEl = document.getElementById("fbco-confidence-badge");
+    const verdictBadgeEl = document.getElementById("fbco-verdict-badge");
     const tagsEl = document.getElementById("fbco-analysis-tags");
     const marketEl = document.getElementById("fbco-analysis-market");
     const maintenanceEl = document.getElementById("fbco-analysis-maintenance");
@@ -824,6 +840,7 @@
     const skillBlock = document.getElementById("fbco-kv-skill");
 
     const accOverview = document.getElementById("fbco-acc-overview");
+    const accUpsides = document.getElementById("fbco-acc-upsides");
     const accMaintenance = document.getElementById("fbco-acc-maintenance");
     const accCommon = document.getElementById("fbco-acc-common");
     const accWear = document.getElementById("fbco-acc-wear");
@@ -921,6 +938,7 @@
     renderList(maintenanceEl, data?.expected_maintenance_near_term, stringifyMaintenance, {
       wrapper: accMaintenance
     });
+    renderList(upsidesEl, data?.upsides, null, { wrapper: accUpsides });
     renderList(issuesEl, data?.common_issues, stringifyIssue, { wrapper: accCommon });
     renderList(wearEl, data?.wear_items, stringifyMaintenance, { wrapper: accWear });
     renderList(checklistEl, data?.inspection_checklist, null, { wrapper: accInspection });
@@ -956,6 +974,23 @@
       Number.isFinite(Number(data?.confidence)) ? Math.round(Number(data?.confidence) * 100) : null;
     if (confidenceBadgeEl) {
       confidenceBadgeEl.textContent = conf == null ? "Confidence --" : `Confidence ${conf}%`;
+    }
+
+    if (verdictBadgeEl) {
+      const verdictText = typeof data?.final_verdict === "string" ? data.final_verdict.toLowerCase() : "";
+      if (verdictText.includes("conditional")) {
+        verdictBadgeEl.textContent = "Conditional buy";
+        verdictBadgeEl.className = "fbco-badge fbco-badge-fair";
+      } else if (verdictText.includes("avoid") || verdictText.includes("walk away")) {
+        verdictBadgeEl.textContent = "Avoid";
+        verdictBadgeEl.className = "fbco-badge fbco-badge-no";
+      } else if (verdictText.includes("buy")) {
+        verdictBadgeEl.textContent = "Buy";
+        verdictBadgeEl.className = "fbco-badge fbco-badge-good";
+      } else {
+        verdictBadgeEl.textContent = "Verdict";
+        verdictBadgeEl.className = "fbco-badge fbco-badge-muted";
+      }
     }
 
     const overviewVisible = repShown || lifespanShown || dailyShown || skillShown || notesShown;
