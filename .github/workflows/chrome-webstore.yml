@@ -16,12 +16,20 @@ jobs:
         run: |
           git archive --format=zip --output=extension.zip HEAD
 
-      - name: Upload to Chrome Web Store
-        uses: googlechrome/webstore-upload-action@v1
+      - name: Set up Node
+        uses: actions/setup-node@v4
         with:
-          extensionId: ${{ secrets.CHROME_EXTENSION_ID }}
-          clientId: ${{ secrets.CHROME_CLIENT_ID }}
-          clientSecret: ${{ secrets.CHROME_CLIENT_SECRET }}
-          refreshToken: ${{ secrets.CHROME_REFRESH_TOKEN }}
-          file: extension.zip
-          publish: true
+          node-version: "20"
+
+      - name: Install Chrome Web Store CLI
+        run: npm i -g chrome-webstore-upload-cli
+
+      - name: Upload to Chrome Web Store
+        run: |
+          chrome-webstore-upload \\
+            --source extension.zip \\
+            --extension-id "${{ secrets.CHROME_EXTENSION_ID }}" \\
+            --client-id "${{ secrets.CHROME_CLIENT_ID }}" \\
+            --client-secret "${{ secrets.CHROME_CLIENT_SECRET }}" \\
+            --refresh-token "${{ secrets.CHROME_REFRESH_TOKEN }}" \\
+            --publish
