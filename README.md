@@ -28,5 +28,18 @@ StraightShot Auto is a Chrome extension that adds an analysis overlay to Faceboo
 Text policy: `docs/privacy-policy.txt`  
 HTML policy: `docs/privacy-policy.html`
 
+## Chrome Web Store Auto-Release
+This repo includes a GitHub Actions workflow that uploads and publishes the extension on every push to `main`.
+
+Required GitHub Secrets:
+- `CHROME_EXTENSION_ID`
+- `CHROME_CLIENT_ID`
+- `CHROME_CLIENT_SECRET`
+- `CHROME_REFRESH_TOKEN`
+
+Notes:
+- You must create a Chrome Web Store API project and OAuth credentials to get the client ID/secret and refresh token.
+- Ensure `manifest.json` version is bumped before pushing to `main`.
+
 ## Notes
 This extension runs only on Facebook Marketplace item pages.

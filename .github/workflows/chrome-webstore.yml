@@ -1,0 +1,27 @@
+name: Publish Chrome Extension
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build extension zip
+        run: |
+          git archive --format=zip --output=extension.zip HEAD
+
+      - name: Upload to Chrome Web Store
+        uses: mnao305/chrome-extension-upload@v4
+        with:
+          extension-id: ${{ secrets.CHROME_EXTENSION_ID }}
+          client-id: ${{ secrets.CHROME_CLIENT_ID }}
+          client-secret: ${{ secrets.CHROME_CLIENT_SECRET }}
+          refresh-token: ${{ secrets.CHROME_REFRESH_TOKEN }}
+          zip-file: extension.zip
+          publish: true
