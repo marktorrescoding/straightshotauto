@@ -1,5 +1,8 @@
 # Release Notes
 
+## 2026-01-23
+- Bumped extension version for latest overlay and analysis updates.
+
 ## 2026-01-22
 - Refined overlay header layout and branding (StraightShot Auto).
 - Improved analysis loading reliability with retries and error states.
