@@ -6,6 +6,9 @@ const SYSTEM_PROMPT =
     "",
     "Hard rules:",
     "- Do NOT invent facts (recalls, failures, pricing) if you are not confident. Use 'unknown' or omit that issue.",
+    "- Title claims must reflect the snapshot; never claim 'clean title' unless seller text explicitly says it.",
+    "- Service items must be correct for the exact year/generation/engine; if unsure, say 'unknown' or use safe generic maintenance.",
+    "- Lifespan tone must be realistic for durable platforms unless an active symptom is present.",
     "- Do NOT assume CVT. Only mention CVT-related risks if that year/model is actually known to use a CVT.",
     "- Do NOT label something a 'well-known issue' unless you are highly confident for that exact year/generation.",
     "- Calibrate for brand/platform: a high-mileage Toyota is not automatically end-of-life; some vehicles routinely exceed 200k+.",
@@ -16,7 +19,7 @@ const SYSTEM_PROMPT =
   ].join("\n");
 
 const CACHE_TTL_SECONDS = 60 * 60 * 24;
-const CACHE_VERSION = "v5"; // bump version so old cache doesn't pollute results
+const CACHE_VERSION = "v6"; // bumped because lifespan logic changed materially
 const RATE_MIN_INTERVAL_MS = 5000;
 const RATE_WINDOW_MS = 60 * 60 * 1000;
 const RATE_MAX_REQUESTS = 30;
@@ -107,6 +110,498 @@ function verdictFromScore(score) {
   return "🚀 Steal";
 }
 
+function normalizeText(value) {
+  return (value || "").toString().toLowerCase();
+}
+
+function deriveTitleStatus(snapshot) {
+  const explicit = normalizeText(snapshot?.title_status);
+  if (explicit) return explicit;
+  const text = normalizeText(
+    [snapshot?.seller_description, snapshot?.source_text, ...(snapshot?.about_items || [])].join(" ")
+  );
+  if (!text) return "unknown";
+  if (/(salvage|rebuilt|rebuild|reconstructed|branded)/i.test(text)) return "rebuilt";
+  if (/(lien)/i.test(text)) return "lien";
+  if (/(clean title)/i.test(text)) return "clean";
+  return "unknown";
+}
+
+function hasServiceRecordsClaim(snapshot) {
+  const text = normalizeText([snapshot?.seller_description, snapshot?.source_text].join(" "));
+  return /(full service records|service records|dealer maintained|maintenance records)/i.test(text);
+}
+
+function scrubCleanTitle(text) {
+  if (!text) return text;
+  return text.replace(/clean title/gi, "title status not stated");
+}
+
+function ensureTitleConsistency(out, snapshot) {
+  const titleStatus = deriveTitleStatus(snapshot);
+  if (titleStatus === "unknown") {
+    out.summary = scrubCleanTitle(out.summary);
+    out.final_verdict = scrubCleanTitle(out.final_verdict);
+    out.notes = scrubCleanTitle(out.notes);
+  }
+  if (titleStatus === "rebuilt" || titleStatus === "lien") {
+    const flag =
+      titleStatus === "rebuilt"
+        ? "Rebuilt/salvage title -> insurance/resale risk"
+        : "Lien on title -> transfer/financing risk";
+    if (!out.risk_flags.some((f) => normalizeText(f).includes("title"))) {
+      out.risk_flags.unshift(flag);
+    }
+  }
+  return titleStatus;
+}
+
+function replaceTimingBelt(items) {
+  return items.map((item) => {
+    if (typeof item === "string" && /timing belt/i.test(item)) {
+      return "Timing chain / valve clearance (verify engine timing system)";
+    }
+    if (item?.item && /timing belt/i.test(item.item)) {
+      return {
+        ...item,
+        item: "Timing chain / valve clearance (verify engine timing system)"
+      };
+    }
+    return item;
+  });
+}
+
+function fixKnownMaintenance(out, snapshot) {
+  const make = (snapshot?.make || "").toLowerCase();
+  const model = (snapshot?.model || "").toLowerCase();
+  const year = Number(snapshot?.year);
+  const isCrv2002to2006 = make === "honda" && model.includes("cr-v") && year >= 2002 && year <= 2006;
+  if (isCrv2002to2006) {
+    out.expected_maintenance_near_term = replaceTimingBelt(out.expected_maintenance_near_term);
+    out.wear_items = replaceTimingBelt(out.wear_items);
+  }
+}
+
+function applyExtremeMileageCaps(out, snapshot) {
+  const miles = Number(snapshot?.mileage_miles);
+  if (!Number.isFinite(miles) || miles < 250000) return;
+  const hasRecords = hasServiceRecordsClaim(snapshot);
+  if (!hasRecords && out.confidence > 0.75) out.confidence = 0.75;
+  if (!(hasRecords && out.confidence >= 0.85) && out.overall_score > 45) {
+    out.overall_score = 45;
+  }
+}
+
+function hasActiveSymptom(snapshot) {
+  const text = normalizeText(
+    [snapshot?.seller_description, snapshot?.source_text, ...(snapshot?.about_items || [])].join(" ")
+  );
+  if (!text) return false;
+
+  const symptom = /(grind|grinding|slip|slipping|overheat|overheating|misfire|check engine|engine light|leak|smoke|smoking|knock|clunk|stall|stalls|no start|won't start)/i;
+  const context = /(engine|transmission|coolant|radiator|oil|power steering|brake|axle|diff|differential|transfer case|4wd|awd|starter|alternator|battery|fuel|exhaust|cv|drivetrain)/i;
+
+  if (!symptom.test(text)) return false;
+  if (!context.test(text)) return false;
+
+  if (/(tear|torn)\b/i.test(text) && !/(leak|stall|no start|overheat|misfire|knock|slip|grind|smoke)/i.test(text)) {
+    return false;
+  }
+
+  return true;
+}
+
+function currentYear() {
+  return new Date().getFullYear();
+}
+
+function hasRecentMaintenanceClaim(snapshot) {
+  const text = normalizeText(
+    [snapshot?.seller_description, snapshot?.source_text, ...(snapshot?.about_items || [])].join(" ")
+  );
+  return /(recent maintenance|within the last|last \d+\s*(months?|weeks?)|new (thermostat|water pump|radiator|starter|alternator|battery|tires))/i.test(
+    text
+  );
+}
+
+function parseMiles(text) {
+  const t = (text || "").toLowerCase().replace(/,/g, "");
+  const m = t.match(/(\d+(\.\d+)?)\s*(k)?\s*miles?/i);
+  if (!m) return null;
+  const n = Number(m[1]);
+  if (!Number.isFinite(n)) return null;
+  return m[3] ? Math.round(n * 1000) : Math.round(n);
+}
+
+function parseTimeMonths(text) {
+  const t = (text || "").toLowerCase();
+  const mm = t.match(/(\d+(\.\d+)?)\s*(\+)?\s*months?/);
+  if (mm) return Math.round(Number(mm[1]));
+  const yy = t.match(/(\d+(\.\d+)?)\s*(\+)?\s*years?/);
+  if (yy) return Math.round(Number(yy[1]) * 12);
+  return null;
+}
+
+function parseRange(line) {
+  const parts = String(line || "").split("(")[0];
+  const [lhs, rhs] = parts.split("/").map((s) => (s || "").trim());
+  const miles = parseMiles(lhs);
+  const months = parseTimeMonths(rhs);
+  return { miles, months };
+}
+
+function extractCaseLine(s, label) {
+  const re = new RegExp(`${label}\\s*:\\s*([^\\n]*)`, "i");
+  const m = String(s || "").match(re);
+  return m ? `${label}: ${m[1].trim()}` : null;
+}
+
+function extractAssumption(line) {
+  const m = String(line || "").match(/\(([^)]+)\)\s*$/);
+  return m ? m[1].trim() : "";
+}
+
+function formatMiles(miles) {
+  if (!Number.isFinite(miles)) return "unknown";
+  if (miles >= 1000) return `${Math.round(miles / 1000)}k miles`;
+  return `${Math.round(miles)} miles`;
+}
+
+function formatMonths(months) {
+  if (!Number.isFinite(months)) return "unknown";
+  const yrs = months / 12;
+  if (months < 18) return `${Math.round(months)} months`;
+  const rounded = Math.round(yrs * 2) / 2;
+  return `${rounded} years`;
+}
+
+function clampInt(n, min, max) {
+  if (!Number.isFinite(n)) return null;
+  return Math.max(min, Math.min(max, Math.round(n)));
+}
+
+function durabilityBucket(snapshot) {
+  const make = normalizeText(snapshot?.make);
+  const model = normalizeText(snapshot?.model);
+  const truckish =
+    /(tacoma|4runner|land cruiser|sequoia|tundra|hilux|gx|lx)/i.test(model) ||
+    make === "toyota" ||
+    (make === "honda" && /(cr-v|pilot|ridgeline)/i.test(model));
+
+  const jeepis = make === "jeep";
+  const euro = /(bmw|mercedes|audi|vw|volkswagen|mini)/i.test(make);
+
+  if (truckish) return "durable";
+  if (euro) return "complex";
+  if (jeepis) return "mixed";
+  return "normal";
+}
+
+function buildLifespanEstimate(out, snapshot) {
+  const milesNow = asNumber(snapshot?.mileage_miles, null);
+  const year = asNumber(snapshot?.year, null);
+  const ageYears = Number.isFinite(year) ? Math.max(0, currentYear() - year) : null;
+
+  const symptom = hasActiveSymptom(snapshot);
+  const recentMaint = hasRecentMaintenanceClaim(snapshot);
+  const records = hasServiceRecordsClaim(snapshot);
+  const bucket = durabilityBucket(snapshot);
+
+  const bestAssump = records || recentMaint ? "well-maintained, issues addressed" : "well-maintained, no hidden major faults";
+  const avgAssump = "typical wear + some deferred items";
+  const worstAssump = symptom ? "active symptom is major root cause" : "deferred maintenance or hidden issues present";
+
+  const m = Number.isFinite(milesNow) ? milesNow : 150000;
+
+  let avgMiles;
+  if (bucket === "durable") avgMiles = m < 150000 ? 60000 : m < 220000 ? 40000 : 25000;
+  else if (bucket === "complex") avgMiles = m < 120000 ? 35000 : m < 180000 ? 25000 : 15000;
+  else if (bucket === "mixed") avgMiles = m < 120000 ? 45000 : m < 200000 ? 30000 : 18000;
+  else avgMiles = m < 150000 ? 50000 : m < 220000 ? 30000 : 20000;
+
+  if (Number.isFinite(ageYears)) {
+    if (ageYears >= 25) avgMiles = Math.round(avgMiles * 0.85);
+    else if (ageYears >= 15) avgMiles = Math.round(avgMiles * 0.92);
+  }
+
+  if (recentMaint) avgMiles = Math.round(avgMiles * 1.1);
+  if (records) avgMiles = Math.round(avgMiles * 1.12);
+
+  const missingPowertrain = !snapshot?.engine || !snapshot?.transmission;
+  const missingDrivetrain = !snapshot?.drivetrain;
+  const infoPenalty = (missingPowertrain ? 0.12 : 0) + (missingDrivetrain ? 0.05 : 0);
+  if (infoPenalty > 0) avgMiles = Math.round(avgMiles * (1 - infoPenalty));
+
+  let avgMonths = avgMiles >= 50000 ? 30 : avgMiles >= 30000 ? 18 : 12;
+  if (Number.isFinite(ageYears) && ageYears >= 25) avgMonths = Math.min(avgMonths, 24);
+  if (Number.isFinite(ageYears) && ageYears >= 30) avgMonths = Math.min(avgMonths, 18);
+
+  let bestMiles = Math.round(avgMiles * 1.6);
+  let bestMonths = Math.round(avgMonths * 1.6);
+
+  let worstMiles = Math.round(avgMiles * (symptom ? 0.25 : 0.6));
+  let worstMonths = Math.round(avgMonths * (symptom ? 0.25 : 0.6));
+
+  if (!symptom) {
+    worstMiles = Math.max(worstMiles, 10000);
+    worstMonths = Math.max(worstMonths, 12);
+  } else {
+    worstMiles = Math.max(0, Math.min(worstMiles, 5000));
+    worstMonths = Math.max(0, Math.min(worstMonths, 3));
+  }
+
+  if (m >= 250000) {
+    bestMiles = Math.min(bestMiles, 30000);
+    bestMonths = Math.min(bestMonths, 18);
+    avgMiles = Math.min(avgMiles, 20000);
+    avgMonths = Math.min(avgMonths, 12);
+    worstMiles = Math.min(worstMiles, symptom ? 3000 : 10000);
+    worstMonths = Math.min(worstMonths, symptom ? 3 : 12);
+  }
+
+  avgMiles = Math.min(avgMiles, bestMiles);
+  worstMiles = Math.min(worstMiles, avgMiles);
+
+  avgMonths = Math.min(avgMonths, bestMonths);
+  worstMonths = Math.min(worstMonths, avgMonths);
+
+  bestMiles = clampInt(bestMiles, 0, 150000) ?? bestMiles;
+  avgMiles = clampInt(avgMiles, 0, bestMiles) ?? avgMiles;
+  worstMiles = clampInt(worstMiles, 0, avgMiles) ?? worstMiles;
+
+  bestMonths = clampInt(bestMonths, 0, 120) ?? bestMonths;
+  avgMonths = clampInt(avgMonths, 0, bestMonths) ?? avgMonths;
+  worstMonths = clampInt(worstMonths, 0, avgMonths) ?? worstMonths;
+
+  out.remaining_lifespan_estimate =
+    `Best-case: ${formatMiles(bestMiles)} / ${formatMonths(bestMonths)} (${bestAssump})\n` +
+    `Average-case: ${formatMiles(avgMiles)} / ${formatMonths(avgMonths)} (${avgAssump})\n` +
+    `Worst-case: ${formatMiles(worstMiles)} / ${formatMonths(worstMonths)} (${worstAssump})`;
+}
+
+function normalizeLifespanEstimate(out, snapshot) {
+  const s = out.remaining_lifespan_estimate;
+  if (!s) return;
+
+  const bestLine = extractCaseLine(s, "Best-case");
+  const avgLine = extractCaseLine(s, "Average-case");
+  const worstLine = extractCaseLine(s, "Worst-case");
+
+  const symptom = hasActiveSymptom(snapshot);
+
+  if (!symptom && /active symptom/i.test(s)) {
+    out.remaining_lifespan_estimate = s.replace(/active symptom[^)\n]*/gi, "deferred maintenance/hidden issues");
+  }
+
+  const parsed = {
+    best: { ...parseRange(bestLine), assumption: extractAssumption(bestLine) },
+    avg: { ...parseRange(avgLine), assumption: extractAssumption(avgLine) },
+    worst: { ...parseRange(worstLine), assumption: extractAssumption(worstLine) }
+  };
+
+  const parseOk =
+    Number.isFinite(parsed.best.miles) &&
+    Number.isFinite(parsed.avg.miles) &&
+    Number.isFinite(parsed.worst.miles) &&
+    Number.isFinite(parsed.best.months) &&
+    Number.isFinite(parsed.avg.months) &&
+    Number.isFinite(parsed.worst.months);
+
+  if (!parseOk) return;
+
+  let bestMiles = parsed.best.miles;
+  let avgMiles = parsed.avg.miles;
+  let worstMiles = parsed.worst.miles;
+
+  let bestMonths = parsed.best.months;
+  let avgMonths = parsed.avg.months;
+  let worstMonths = parsed.worst.months;
+
+  avgMiles = Math.min(avgMiles, bestMiles);
+  worstMiles = Math.min(worstMiles, avgMiles);
+  avgMonths = Math.min(avgMonths, bestMonths);
+  worstMonths = Math.min(worstMonths, avgMonths);
+
+  if (!symptom) {
+    worstMiles = Math.max(worstMiles, 10000);
+    worstMonths = Math.max(worstMonths, 12);
+  }
+
+  out.remaining_lifespan_estimate =
+    `Best-case: ${formatMiles(bestMiles)} / ${formatMonths(bestMonths)} (${parsed.best.assumption || "well-maintained"})\n` +
+    `Average-case: ${formatMiles(avgMiles)} / ${formatMonths(avgMonths)} (${parsed.avg.assumption || "typical upkeep"})\n` +
+    `Worst-case: ${formatMiles(worstMiles)} / ${formatMonths(worstMonths)} (${parsed.worst.assumption || (symptom ? "active symptom is major fault" : "deferred maintenance/hidden issues")})`;
+}
+
+function ensureBuyerQuestions(out, snapshot, titleStatus) {
+  const sellerText = normalizeText(snapshot?.seller_description);
+  const mileage = Number(snapshot?.mileage_miles);
+  const genericRe = /(any issues|any accidents|accident history|issues\?)/i;
+  const componentRe =
+    /(engine|transmission|trans\b|turbo|timing|diff|differential|transfer case|ptu|steering|rack|suspension|strut|ball joint|alternator|battery|a\/c|ac\b|coolant|radiator|oil|brake|drivetrain|4wd|awd)/i;
+
+  const ensureWhy = (q) => (/\([^)]+\)\s*$/.test(q) ? q : `${q} (why it matters)`);
+  const isComponentSpecific = (q) => componentRe.test(q);
+  const seen = new Set();
+  const addUnique = (list, q) => {
+    const key = normalizeText(q);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    list.push(ensureWhy(q));
+  };
+
+  const base = asArray(out.buyer_questions)
+    .map((q) => asString(q, ""))
+    .filter((q) => q && !genericRe.test(q));
+
+  const list = [];
+  base.forEach((q) => addUnique(list, q));
+
+  const candidates = [];
+  if (!snapshot?.drivetrain) candidates.push("Is it FWD or AWD? (parts/maintenance differ)");
+  if (!snapshot?.transmission || !snapshot?.engine) {
+    candidates.push("Which transmission/engine is it? (changes risk profile)");
+  }
+  if (sellerText.includes("battery")) {
+    candidates.push("Has the alternator/charging system been tested? (battery issues repeat)");
+  }
+  if (sellerText.includes("new tires") || sellerText.includes("tires")) {
+    candidates.push("Any recent alignment/suspension work after tire replacement? (prevents uneven wear)");
+  }
+  if (sellerText.includes("ac") || sellerText.includes("a/c")) {
+    candidates.push("Does the A/C blow cold at idle? (compressor/charge check)");
+  }
+  if (Number.isFinite(mileage) && mileage > 120000) {
+    candidates.push("If automatic, when was the transmission fluid serviced? (120k+ wear item)");
+  }
+  if (titleStatus === "unknown") {
+    candidates.push("Can you provide the VIN and title status? (history/resale impact)");
+  }
+  candidates.push("Any recent engine or transmission work? (core reliability)");
+  candidates.push("Any drivetrain noises or clunks? (diff/axle wear)");
+
+  // Ensure at least 2 component-specific questions.
+  let componentCount = list.filter(isComponentSpecific).length;
+  for (const q of candidates) {
+    if (list.length >= 7) break;
+    if (componentCount >= 2) break;
+    if (isComponentSpecific(q)) {
+      addUnique(list, q);
+      componentCount += 1;
+    }
+  }
+  for (const q of candidates) {
+    if (list.length >= 7) break;
+    addUnique(list, q);
+  }
+  if (list.length < 4) {
+    addUnique(list, "Any warning lights or codes present? (hidden faults)");
+    addUnique(list, "Any recent suspension or steering repairs? (safety/wear)");
+  }
+  while (list.length < 4) {
+    addUnique(list, "Any recent fluid services? (maintenance baseline)");
+  }
+
+  out.buyer_questions = list.slice(0, 7);
+}
+
+function sharpenRiskFlags(out, snapshot, titleStatus) {
+  const flags = asArray(out.risk_flags).map((f) => asString(f, "")).filter(Boolean);
+  const updated = [];
+  const vagueHighMileage = /high mileage/i;
+
+  for (const flag of flags) {
+    if (vagueHighMileage.test(flag) && !/->|\$|cost|risk/i.test(flag)) {
+      updated.push("High mileage -> drivetrain/engine wear risk ($unknown)");
+      continue;
+    }
+    if (!/\$/i.test(flag)) {
+      updated.push(`${flag} ($unknown)`);
+      continue;
+    }
+    updated.push(flag);
+  }
+
+  const derived = [];
+  if (titleStatus === "unknown") {
+    derived.push("Title status unknown -> resale/insurance uncertainty ($unknown)");
+  }
+  if (!snapshot?.drivetrain) {
+    derived.push("Drivetrain unknown -> parts/maintenance mismatch risk ($unknown)");
+  }
+  if (!snapshot?.transmission) {
+    derived.push("Transmission unknown -> service/repair risk ($unknown)");
+  }
+  if (!snapshot?.seller_description) {
+    derived.push("Limited history -> deferred maintenance risk ($unknown)");
+  }
+
+  const combined = [...updated, ...derived];
+  out.risk_flags = combined.slice(0, 6).filter(Boolean);
+  while (out.risk_flags.length < 3) {
+    out.risk_flags.push("Inspection findings unknown -> hidden repair risk ($unknown)");
+  }
+}
+
+function groundReputation(out) {
+  const rep = out.year_model_reputation || "";
+  if (!rep) return;
+  if (/no (single )?(major )?platform-wide (deal-breaker )?issues|no major issues|no known issues/i.test(rep)) {
+    out.year_model_reputation =
+      "Reputation depends heavily on maintenance and powertrain condition for this specific listing; verify engine/trans/drivetrain details and service history.";
+  }
+}
+
+function fixWearItemCosts(out, snapshot) {
+  const sellerText = normalizeText(snapshot?.seller_description);
+  const hasNewTires = /new tires|brand new tires|continental tires|tires w\/ warranty|tires with warranty/i.test(
+    sellerText
+  );
+
+  out.wear_items = asArray(out.wear_items).map((x) => {
+    if (!x?.item) return x;
+    if (!/tire/i.test(x.item)) return x;
+
+    if (hasNewTires) {
+      return {
+        ...x,
+        item: x.item,
+        estimated_cost_diy: "$0–$50 (rotate/inspect only)",
+        estimated_cost_shop: "$40–$120"
+      };
+    }
+
+    return {
+      ...x,
+      estimated_cost_diy: "$500–$1,000 (set of 4)",
+      estimated_cost_shop: "$700–$1,300"
+    };
+  });
+}
+
+function replaceSpeculativeCELMaintenance(out, snapshot) {
+  if (!hasActiveSymptom(snapshot)) return;
+
+  const replaceIfSpeculative = (arr) =>
+    asArray(arr).map((x) => {
+      const item = asString(x?.item, "");
+      const why = asString(x?.why_it_matters, "");
+      const looksLikeGuess = /o2\s*sensor/i.test(item) || /engine light/i.test(why) || /may indicate/i.test(why);
+      if (!looksLikeGuess) return x;
+
+      return {
+        ...x,
+        item: "Scan CEL codes + diagnose root cause",
+        typical_mileage_range: "Now",
+        why_it_matters: "Determines if fault is minor vs major",
+        estimated_cost_diy: "$0–$50",
+        estimated_cost_shop: "$100–$200"
+      };
+    });
+
+  out.expected_maintenance_near_term = replaceIfSpeculative(out.expected_maintenance_near_term);
+}
+
 /**
  * Coerce/fill required output so UI doesn't break even if the model slips.
  * Also enforces some consistency constraints.
@@ -140,6 +635,7 @@ function coerceAndFill(raw, snapshot) {
     estimated_cost_shop: asString(x?.estimated_cost_shop)
   }));
 
+  // Still read from model, but we overwrite with deterministic builder.
   out.remaining_lifespan_estimate = asString(raw.remaining_lifespan_estimate);
   out.market_value_estimate = asString(raw.market_value_estimate);
   out.price_opinion = asString(raw.price_opinion);
@@ -189,6 +685,17 @@ function coerceAndFill(raw, snapshot) {
     const m = `Missing listing info: ${missing.join(", ")}. This reduces confidence.`;
     out.notes = out.notes ? `${out.notes} ${m}` : m;
   }
+
+  const derivedTitleStatus = ensureTitleConsistency(out, snapshot);
+  fixKnownMaintenance(out, snapshot);
+  replaceSpeculativeCELMaintenance(out, snapshot);
+  ensureBuyerQuestions(out, snapshot, derivedTitleStatus);
+  sharpenRiskFlags(out, snapshot, derivedTitleStatus);
+  groundReputation(out);
+  fixWearItemCosts(out, snapshot);
+  buildLifespanEstimate(out, snapshot);
+  normalizeLifespanEstimate(out, snapshot);
+  applyExtremeMileageCaps(out, snapshot);
 
   return out;
 }
@@ -317,6 +824,11 @@ export default {
       year: payload?.year || null,
       make: payload?.make || null,
       model: payload?.model || null,
+      drivetrain: payload?.drivetrain || null,
+      transmission: payload?.transmission || null,
+      engine: payload?.engine || null,
+      title_status: payload?.title_status || null,
+      owners: payload?.owners ?? null,
       price_usd: payload?.price_usd ?? null,
       mileage_miles: payload?.mileage_miles ?? null,
       seller_description: payload?.seller_description || null,
@@ -370,6 +882,8 @@ export default {
       "- Give a clear recommendation: buy / conditional buy / avoid, and explain the reason in plain language.",
       "- Calibrate for the make/platform: high-mileage Toyotas are not automatically end-of-life; some platforms are.",
       "- Provide a realistic 6–18 month maintenance outlook at this mileage (not generic).",
+      "- Title claims must be quoted from seller text; do NOT claim 'clean title' unless explicitly stated.",
+      "- Service items must be correct for the exact year/engine; if unsure, say 'unknown' or stick to safe generic maintenance.",
       "- COMMON ISSUES: only include items you are highly confident apply to this exact year/generation/engine family.",
       "- Do NOT label generic wear items (brakes, tires, suspension wear) as common issues. Put them under wear_items.",
       "- If no platform-known issues are highly confident, common_issues should be an empty array.",
@@ -394,6 +908,7 @@ export default {
       "- Each case must state the assumption in parentheses.",
       "- If listing includes an active symptom, Worst-case MUST assume it is a major root cause and be materially shorter.",
       "- Avoid catastrophic tone unless a known platform failure is documented; use wording like \"if deferred maintenance or hidden issues are present.\"",
+      "- If no active symptom is present, worst-case should not be less than ~10k miles / 1 year.",
       "- Prefer miles + time when possible (e.g., \"20k–60k miles / 1–3 years\").",
       "",
       "Buyer questions format (REQUIRED):",
@@ -412,6 +927,7 @@ export default {
       "Common issues empty handling:",
       "- If common_issues is empty, briefly explain why in year_model_reputation or notes.",
       "- Use language like: \"No platform-wide deal-breaker issues are strongly documented for this year, but age-related wear still applies.\"",
+      "- Avoid absolute claims; if mentioning platform-wide issues, include uncertainty and verification language.",
       "",
       "Completed service handling:",
       "- If the seller explicitly states a service was completed recently, reflect that and shift focus to the NEXT interval.",
