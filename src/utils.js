@@ -11,7 +11,13 @@
     analysisSeq: 0,
     analysisReady: false,
     lastVehicle: null,
-    lastRenderKey: null
+    lastRenderKey: null,
+    authSession: null,
+    authValidated: false,
+    authMessage: "",
+    freeCount: 0,
+    lastFreeSnapshotKey: null,
+    analysisGated: false
   };
 
   window.FBCO_isVisible = function (el) {

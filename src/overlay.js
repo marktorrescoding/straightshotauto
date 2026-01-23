@@ -153,9 +153,25 @@
             </div>
           </div>
 
-          <div class="fbco-tags" id="fbco-analysis-tags"></div>
+          <div class="fbco-card fbco-card-access" id="fbco-access-card">
+            <div class="fbco-access-row">
+              <div id="fbco-access-status" class="fbco-text">Free analyses remaining: —</div>
+              <span id="fbco-access-badge" class="fbco-badge fbco-badge-muted">Free</span>
+            </div>
+            <div class="fbco-access-actions">
+              <input id="fbco-auth-email" class="fbco-input" type="email" placeholder="Email for login code" />
+              <button id="fbco-auth-send" class="fbco-btn" type="button">Send code</button>
+              <input id="fbco-auth-code" class="fbco-input" type="text" placeholder="Enter code" />
+              <button id="fbco-auth-verify" class="fbco-btn" type="button">Verify</button>
+              <button id="fbco-auth-subscribe" class="fbco-btn fbco-btn-primary" type="button">Subscribe $3/mo</button>
+              <button id="fbco-auth-logout" class="fbco-btn fbco-btn-ghost" type="button">Sign out</button>
+            </div>
+            <div id="fbco-auth-message" class="fbco-text fbco-muted">—</div>
+          </div>
 
-          <div class="fbco-accordion" id="fbco-acc-overview">
+          <div class="fbco-tags fbco-blurable" id="fbco-analysis-tags"></div>
+
+          <div class="fbco-accordion fbco-blurable" id="fbco-acc-overview">
             <button class="fbco-accordion-toggle" type="button" data-target="fbco-overview-body" aria-expanded="false">
               <span>Overview</span>
               <span class="fbco-accordion-icon">▾</span>
@@ -184,7 +200,7 @@
             </div>
           </div>
 
-          <div class="fbco-accordion" id="fbco-acc-maintenance">
+          <div class="fbco-accordion fbco-blurable" id="fbco-acc-maintenance">
             <button class="fbco-accordion-toggle" type="button" data-target="fbco-maintenance-body" aria-expanded="true">
               <span>Likely maintenance (6–18 months)</span>
               <span class="fbco-accordion-icon">▾</span>
@@ -194,7 +210,7 @@
             </div>
           </div>
 
-          <div class="fbco-accordion" id="fbco-acc-common">
+          <div class="fbco-accordion fbco-blurable" id="fbco-acc-common">
             <button class="fbco-accordion-toggle" type="button" data-target="fbco-common-body" aria-expanded="false">
               <span>Common issues</span>
               <span class="fbco-accordion-icon">▾</span>
@@ -204,7 +220,7 @@
             </div>
           </div>
 
-          <div class="fbco-accordion" id="fbco-acc-wear">
+          <div class="fbco-accordion fbco-blurable" id="fbco-acc-wear">
             <button class="fbco-accordion-toggle" type="button" data-target="fbco-wear-body" aria-expanded="false">
               <span>Wear items</span>
               <span class="fbco-accordion-icon">▾</span>
@@ -214,7 +230,7 @@
             </div>
           </div>
 
-          <div class="fbco-accordion" id="fbco-acc-upsides">
+          <div class="fbco-accordion fbco-blurable" id="fbco-acc-upsides">
             <button class="fbco-accordion-toggle" type="button" data-target="fbco-upsides-body" aria-expanded="false">
               <span>✅ Upsides</span>
               <span class="fbco-accordion-icon">▾</span>
@@ -224,7 +240,7 @@
             </div>
           </div>
 
-          <div class="fbco-accordion" id="fbco-acc-risk">
+          <div class="fbco-accordion fbco-blurable" id="fbco-acc-risk">
             <button class="fbco-accordion-toggle" type="button" data-target="fbco-risk-body" aria-expanded="false">
               <span>⚠️ Risk flags</span>
               <span class="fbco-accordion-icon">▾</span>
@@ -234,7 +250,7 @@
             </div>
           </div>
 
-          <div class="fbco-accordion" id="fbco-acc-deal">
+          <div class="fbco-accordion fbco-blurable" id="fbco-acc-deal">
             <button class="fbco-accordion-toggle" type="button" data-target="fbco-deal-body" aria-expanded="false">
               <span>🛑 Deal breakers</span>
               <span class="fbco-accordion-icon">▾</span>
@@ -244,7 +260,7 @@
             </div>
           </div>
 
-          <div class="fbco-accordion" id="fbco-acc-inspection">
+          <div class="fbco-accordion fbco-blurable" id="fbco-acc-inspection">
             <button class="fbco-accordion-toggle" type="button" data-target="fbco-inspection-body" aria-expanded="false">
               <span>Inspection checklist</span>
               <span class="fbco-accordion-icon">▾</span>
@@ -254,7 +270,7 @@
             </div>
           </div>
 
-          <div class="fbco-accordion" id="fbco-acc-questions">
+          <div class="fbco-accordion fbco-blurable" id="fbco-acc-questions">
             <button class="fbco-accordion-toggle" type="button" data-target="fbco-questions-body" aria-expanded="false">
               <span>Buyer questions</span>
               <span class="fbco-accordion-icon">▾</span>
@@ -264,7 +280,7 @@
             </div>
           </div>
 
-          <div class="fbco-accordion" id="fbco-acc-market">
+          <div class="fbco-accordion fbco-blurable" id="fbco-acc-market">
             <button class="fbco-accordion-toggle" type="button" data-target="fbco-market-body" aria-expanded="false">
               <span>Market value & price opinion</span>
               <span class="fbco-accordion-icon">▾</span>
@@ -460,6 +476,46 @@
     };
     refreshBtn?.addEventListener("click", onRefresh);
     if (refreshBtn) cleanupFns.push(() => refreshBtn.removeEventListener("click", onRefresh));
+
+    const emailInput = root.querySelector("#fbco-auth-email");
+    const codeInput = root.querySelector("#fbco-auth-code");
+    const sendBtn = root.querySelector("#fbco-auth-send");
+    const verifyBtn = root.querySelector("#fbco-auth-verify");
+    const subscribeBtn = root.querySelector("#fbco-auth-subscribe");
+    const logoutBtn = root.querySelector("#fbco-auth-logout");
+
+    const onSend = (e) => {
+      e.stopPropagation();
+      const email = emailInput?.value?.trim();
+      if (!email) return;
+      window.FBCO_authSendCode && window.FBCO_authSendCode(email);
+    };
+    sendBtn?.addEventListener("click", onSend);
+    if (sendBtn) cleanupFns.push(() => sendBtn.removeEventListener("click", onSend));
+
+    const onVerify = (e) => {
+      e.stopPropagation();
+      const email = emailInput?.value?.trim();
+      const code = codeInput?.value?.trim();
+      if (!email || !code) return;
+      window.FBCO_authVerifyCode && window.FBCO_authVerifyCode(email, code);
+    };
+    verifyBtn?.addEventListener("click", onVerify);
+    if (verifyBtn) cleanupFns.push(() => verifyBtn.removeEventListener("click", onVerify));
+
+    const onSubscribe = (e) => {
+      e.stopPropagation();
+      window.FBCO_startCheckout && window.FBCO_startCheckout();
+    };
+    subscribeBtn?.addEventListener("click", onSubscribe);
+    if (subscribeBtn) cleanupFns.push(() => subscribeBtn.removeEventListener("click", onSubscribe));
+
+    const onLogout = (e) => {
+      e.stopPropagation();
+      window.FBCO_authLogout && window.FBCO_authLogout();
+    };
+    logoutBtn?.addEventListener("click", onLogout);
+    if (logoutBtn) cleanupFns.push(() => logoutBtn.removeEventListener("click", onLogout));
 
     const accordionToggles = Array.from(root.querySelectorAll(".fbco-accordion-toggle"));
     accordionToggles.forEach((btn) => {
@@ -838,6 +894,15 @@
     const lifespanBlock = document.getElementById("fbco-kv-lifespan");
     const dailyBlock = document.getElementById("fbco-kv-daily");
     const skillBlock = document.getElementById("fbco-kv-skill");
+    const accessStatusEl = document.getElementById("fbco-access-status");
+    const accessBadgeEl = document.getElementById("fbco-access-badge");
+    const authMessageEl = document.getElementById("fbco-auth-message");
+    const authEmailEl = document.getElementById("fbco-auth-email");
+    const authCodeEl = document.getElementById("fbco-auth-code");
+    const authSendBtn = document.getElementById("fbco-auth-send");
+    const authVerifyBtn = document.getElementById("fbco-auth-verify");
+    const authSubscribeBtn = document.getElementById("fbco-auth-subscribe");
+    const authLogoutBtn = document.getElementById("fbco-auth-logout");
 
     const accOverview = document.getElementById("fbco-acc-overview");
     const accUpsides = document.getElementById("fbco-acc-upsides");
@@ -886,6 +951,42 @@
     const data = analysisState?.data;
     const loadingText = analysisState?.loadingText;
     const ready = analysisState?.ready;
+    const access = analysisState?.access;
+    const gated = analysisState?.gated;
+
+    const panel = document.getElementById("fbco-panel");
+    if (panel) panel.classList.toggle("fbco-gated", Boolean(gated));
+
+    if (authMessageEl) {
+      const msg = access?.message || window.FBCO_STATE?.authMessage || "";
+      authMessageEl.textContent = msg || "—";
+    }
+    if (accessStatusEl) {
+      if (access?.validated) {
+        accessStatusEl.textContent = "Unlocked: subscription active.";
+      } else if (gated) {
+        accessStatusEl.textContent = "Free limit reached. Unlock full results below.";
+      } else {
+        accessStatusEl.textContent = `Free analyses remaining: ${access?.freeRemaining ?? "—"}`;
+      }
+    }
+    if (accessBadgeEl) {
+      if (access?.validated) {
+        accessBadgeEl.textContent = "Unlocked";
+        accessBadgeEl.classList.remove("fbco-badge-muted");
+      } else {
+        accessBadgeEl.textContent = access?.authenticated ? "Signed in" : "Free";
+        accessBadgeEl.classList.add("fbco-badge-muted");
+      }
+    }
+    if (authEmailEl && access?.email && !authEmailEl.value) {
+      authEmailEl.value = access.email;
+    }
+    if (authSendBtn) authSendBtn.disabled = access?.validated;
+    if (authVerifyBtn) authVerifyBtn.disabled = access?.validated;
+    if (authSubscribeBtn) authSubscribeBtn.disabled = access?.validated;
+    if (authLogoutBtn) authLogoutBtn.disabled = !access?.authenticated;
+    if (authCodeEl) authCodeEl.disabled = access?.validated;
 
     const busy = !ready;
     root.dataset.loading = busy ? "1" : "0";

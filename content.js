@@ -1,6 +1,14 @@
 (() => {
   const UPDATE_DEBOUNCE_MS = 900;
   const API_URL = "https://car-bot.car-bot.workers.dev/analyze";
+  const AUTH_STATUS_URL = "https://car-bot.car-bot.workers.dev/auth/status";
+  const BILLING_CHECKOUT_URL = "https://car-bot.car-bot.workers.dev/billing/checkout";
+  const SUPABASE_URL = "https://YOUR_SUPABASE_PROJECT.supabase.co";
+  const SUPABASE_ANON_KEY = "YOUR_SUPABASE_ANON_KEY";
+  const FREE_LIMIT = 5;
+  const AUTH_STORAGE_KEY = "fbco.auth.session.v1";
+  const FREE_COUNT_KEY = "fbco.free.count.v1";
+  const FREE_KEY_KEY = "fbco.free.snapshot.v1";
 
   function isItemPage() {
     return /\/marketplace\/item\//.test(location.pathname);
@@ -42,12 +50,152 @@
     return hasSummary && hasVerdict && hasConfidence;
   }
 
+  function buildAccessInfo(state) {
+    const freeCount = loadFreeCount();
+    return {
+      authenticated: Boolean(state?.authSession?.access_token),
+      validated: Boolean(state?.authValidated),
+      freeCount,
+      freeRemaining: Math.max(0, FREE_LIMIT - freeCount),
+      email: state?.authSession?.user?.email || "",
+      message: state?.authMessage || ""
+    };
+  }
+
+  function loadAuthSession() {
+    return window.FBCO_storage.get(AUTH_STORAGE_KEY, null);
+  }
+
+  function saveAuthSession(session) {
+    window.FBCO_storage.set(AUTH_STORAGE_KEY, session);
+  }
+
+  function clearAuthSession() {
+    window.FBCO_storage.set(AUTH_STORAGE_KEY, null);
+  }
+
+  function loadFreeCount() {
+    return Number(window.FBCO_storage.get(FREE_COUNT_KEY, 0)) || 0;
+  }
+
+  function saveFreeCount(count) {
+    window.FBCO_storage.set(FREE_COUNT_KEY, count);
+  }
+
+  function loadLastFreeKey() {
+    return window.FBCO_storage.get(FREE_KEY_KEY, null);
+  }
+
+  function saveLastFreeKey(key) {
+    window.FBCO_storage.set(FREE_KEY_KEY, key);
+  }
+
+  async function refreshSession(session) {
+    if (!session?.refresh_token) return session;
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+      method: "POST",
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ refresh_token: session.refresh_token })
+    });
+    if (!res.ok) return session;
+    const data = await res.json();
+    const next = {
+      access_token: data.access_token,
+      refresh_token: data.refresh_token,
+      expires_at: data.expires_at,
+      user: data.user
+    };
+    saveAuthSession(next);
+    return next;
+  }
+
+  async function getValidSession() {
+    const session = loadAuthSession();
+    if (!session?.access_token || !session?.expires_at) return null;
+    const expiresAtMs = session.expires_at * 1000;
+    if (Date.now() + 60_000 < expiresAtMs) return session;
+    return refreshSession(session);
+  }
+
+  async function sendLoginCode(email) {
+    if (!SUPABASE_URL || SUPABASE_URL.includes("YOUR_SUPABASE") || !SUPABASE_ANON_KEY || SUPABASE_ANON_KEY.includes("YOUR_SUPABASE")) {
+      throw new Error("Auth not configured");
+    }
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/otp`, {
+      method: "POST",
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ email, create_user: true })
+    });
+    if (!res.ok) throw new Error("Unable to send login code");
+  }
+
+  async function verifyLoginCode(email, code) {
+    if (!SUPABASE_URL || SUPABASE_URL.includes("YOUR_SUPABASE") || !SUPABASE_ANON_KEY || SUPABASE_ANON_KEY.includes("YOUR_SUPABASE")) {
+      throw new Error("Auth not configured");
+    }
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/verify`, {
+      method: "POST",
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ type: "email", email, token: code })
+    });
+    if (!res.ok) throw new Error("Invalid code");
+    const data = await res.json();
+    const session = {
+      access_token: data.access_token,
+      refresh_token: data.refresh_token,
+      expires_at: data.expires_at,
+      user: data.user
+    };
+    saveAuthSession(session);
+    return session;
+  }
+
+  async function fetchAuthStatus(session) {
+    if (!session?.access_token) return { authenticated: false };
+    const res = await fetch(AUTH_STATUS_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+        "Content-Type": "application/json"
+      }
+    });
+    if (!res.ok) return { authenticated: false };
+    return res.json();
+  }
+
+  async function startCheckout(session) {
+    const res = await fetch(BILLING_CHECKOUT_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${session.access_token}`,
+        "Content-Type": "application/json"
+      }
+    });
+    if (!res.ok) throw new Error("Unable to start checkout");
+    const data = await res.json();
+    if (data?.url) window.open(data.url, "_blank", "noopener,noreferrer");
+  }
+
   async function requestAnalysis(vehicle, opts = {}) {
     const state = window.FBCO_STATE;
     if (!vehicle) return;
 
     const key = buildSnapshotKey(vehicle);
     if (!key) return;
+
+    const session = await getValidSession();
+    state.authSession = session;
+    const authStatus = session ? await fetchAuthStatus(session) : { authenticated: false };
+    state.authValidated = Boolean(authStatus?.validated);
 
     state.analysisRetrying = false;
 
@@ -76,7 +224,9 @@
       ready: state.analysisReady,
       error: null,
       data: state.lastAnalysis,
-      loadingText: state.loadingPhase
+      loadingText: state.loadingPhase,
+      access: buildAccessInfo(state),
+      gated: state.analysisGated
     });
 
     const phaseTimer = setTimeout(() => {
@@ -87,7 +237,9 @@
           ready: window.FBCO_STATE.analysisReady,
           error: window.FBCO_STATE.analysisError,
           data: window.FBCO_STATE.lastAnalysis,
-          loadingText: window.FBCO_STATE.loadingPhase
+          loadingText: window.FBCO_STATE.loadingPhase,
+          access: buildAccessInfo(window.FBCO_STATE),
+          gated: window.FBCO_STATE.analysisGated
         });
       }
     }, 3500);
@@ -97,7 +249,10 @@
     try {
       const res = await fetch(API_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {})
+        },
         signal: controller.signal,
         body: JSON.stringify({
           url: vehicle.url,
@@ -127,11 +282,27 @@
 
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
+      const validatedHeader = res.headers.get("X-User-Validated");
+      if (validatedHeader != null) {
+        state.authValidated = validatedHeader === "true";
+      }
 
       if (seq !== state.analysisSeq) return;
       state.lastAnalysis = data;
       const complete = isCompleteAnalysis(data);
       state.analysisReady = complete;
+
+      const freeCount = loadFreeCount();
+      const lastKey = loadLastFreeKey();
+      if (!state.authValidated && complete) {
+        if (lastKey !== key) {
+          saveFreeCount(freeCount + 1);
+          saveLastFreeKey(key);
+        }
+      }
+      const updatedFree = loadFreeCount();
+      state.freeCount = updatedFree;
+      state.analysisGated = !state.authValidated && updatedFree >= FREE_LIMIT;
 
       if (!complete) {
         const retryKey = key;
@@ -175,7 +346,9 @@
         ready: state.analysisReady,
         error: state.analysisError,
         data: state.lastAnalysis,
-        loadingText: state.loadingPhase
+        loadingText: state.loadingPhase,
+        access: buildAccessInfo(state),
+        gated: state.analysisGated
       });
     }
   }
@@ -237,7 +410,9 @@
         ready: state.analysisReady,
         error: state.analysisError,
         data: state.lastAnalysis,
-        loadingText: state.loadingPhase
+        loadingText: state.loadingPhase,
+        access: buildAccessInfo(state),
+        gated: state.analysisGated
       });
     }
 
@@ -311,6 +486,70 @@
     }
   }
 
+  async function updateAccessState() {
+    const state = window.FBCO_STATE;
+    const session = await getValidSession();
+    state.authSession = session;
+    const authStatus = session ? await fetchAuthStatus(session) : { authenticated: false };
+    state.authValidated = Boolean(authStatus?.validated);
+    state.freeCount = loadFreeCount();
+    state.analysisGated = !state.authValidated && state.freeCount >= FREE_LIMIT;
+  }
+
+  window.FBCO_authSendCode = async function (email) {
+    const state = window.FBCO_STATE;
+    state.authMessage = "";
+    try {
+      await sendLoginCode(email);
+      state.authMessage = "Check your email for the login code.";
+    } catch (err) {
+      state.authMessage = err?.message || "Unable to send code.";
+    }
+    updateAccessState();
+    scheduleUpdate();
+  };
+
+  window.FBCO_authVerifyCode = async function (email, code) {
+    const state = window.FBCO_STATE;
+    state.authMessage = "";
+    try {
+      const session = await verifyLoginCode(email, code);
+      state.authSession = session;
+      state.authMessage = "Signed in.";
+    } catch (err) {
+      state.authMessage = err?.message || "Unable to verify code.";
+    }
+    await updateAccessState();
+    scheduleUpdate();
+  };
+
+  window.FBCO_authLogout = async function () {
+    clearAuthSession();
+    const state = window.FBCO_STATE;
+    state.authSession = null;
+    state.authValidated = false;
+    state.authMessage = "Signed out.";
+    updateAccessState();
+    scheduleUpdate();
+  };
+
+  window.FBCO_startCheckout = async function () {
+    const state = window.FBCO_STATE;
+    state.authMessage = "";
+    try {
+      const session = await getValidSession();
+      if (!session?.access_token) {
+        state.authMessage = "Sign in to start checkout.";
+        scheduleUpdate();
+        return;
+      }
+      await startCheckout(session);
+    } catch (err) {
+      state.authMessage = err?.message || "Unable to start checkout.";
+    }
+    scheduleUpdate();
+  };
+
   window.FBCO_insertMessage = insertMessage;
   window.FBCO_requestRefresh = function () {
     const state = window.FBCO_STATE;
@@ -331,7 +570,7 @@
   const scheduleUpdate = window.FBCO_debounce(runUpdate, UPDATE_DEBOUNCE_MS);
 
   // Initial run
-  scheduleUpdate();
+  updateAccessState().finally(() => scheduleUpdate());
 
   window.addEventListener("pageshow", () => scheduleUpdate());
   document.addEventListener("visibilitychange", () => {

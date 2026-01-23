@@ -118,6 +118,95 @@ function normalizeText(value) {
   return (value || "").toString().toLowerCase();
 }
 
+function getAuthToken(request) {
+  const header = request.headers.get("Authorization") || "";
+  if (header.toLowerCase().startsWith("bearer ")) return header.slice(7).trim();
+  return null;
+}
+
+async function fetchSupabaseUser(token, env) {
+  if (!token) return null;
+  if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) return null;
+  const res = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      apikey: env.SUPABASE_ANON_KEY
+    }
+  });
+  if (!res.ok) return null;
+  return res.json();
+}
+
+async function supabaseAdminRequest(path, env, options = {}) {
+  if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) return null;
+  const res = await fetch(`${env.SUPABASE_URL}${path}`, {
+    ...options,
+    headers: {
+      apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      "Content-Type": "application/json",
+      ...(options.headers || {})
+    }
+  });
+  if (!res.ok) return null;
+  if (res.status === 204) return {};
+  return res.json();
+}
+
+async function getSubscriptionRecord(userId, env) {
+  if (!userId) return null;
+  const path = `/rest/v1/subscriptions?user_id=eq.${userId}&select=user_id,status,plan,updated_at,stripe_customer_id&order=updated_at.desc&limit=1`;
+  const data = await supabaseAdminRequest(path, env);
+  return Array.isArray(data) ? data[0] : null;
+}
+
+function isSubscriptionActive(record) {
+  const status = normalizeText(record?.status);
+  return status === "active" || status === "trialing";
+}
+
+async function stripeRequest(env, path, body) {
+  if (!env.STRIPE_SECRET_KEY) return null;
+  const res = await fetch(`https://api.stripe.com/v1/${path}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${env.STRIPE_SECRET_KEY}`,
+      "Content-Type": "application/x-www-form-urlencoded"
+    },
+    body
+  });
+  if (!res.ok) return null;
+  return res.json();
+}
+
+function hexFromBuffer(buf) {
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function verifyStripeSignature(payload, signatureHeader, secret) {
+  if (!signatureHeader || !secret) return false;
+  const parts = signatureHeader.split(",").map((p) => p.trim());
+  const timestampPart = parts.find((p) => p.startsWith("t="));
+  const sigPart = parts.find((p) => p.startsWith("v1="));
+  if (!timestampPart || !sigPart) return false;
+
+  const timestamp = timestampPart.split("=")[1];
+  const signature = sigPart.split("=")[1];
+  const signedPayload = `${timestamp}.${payload}`;
+
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(signedPayload));
+  return hexFromBuffer(mac) === signature;
+}
+
 function deriveTitleStatus(snapshot) {
   const explicit = normalizeText(snapshot?.title_status);
   if (explicit) return explicit;
@@ -1049,6 +1138,112 @@ export default {
       return new Response(null, { status: 204, headers: corsHeaders(origin) });
     }
 
+    if (url.pathname === "/stripe/webhook") {
+      if (request.method !== "POST") {
+        return jsonResponse({ error: "Method not allowed" }, origin, 405);
+      }
+      const signature = request.headers.get("Stripe-Signature");
+      const payloadText = await request.text();
+      const verified = await verifyStripeSignature(payloadText, signature, env.STRIPE_WEBHOOK_SECRET);
+      if (!verified) return jsonResponse({ error: "Invalid signature" }, origin, 400);
+
+      let event = null;
+      try {
+        event = JSON.parse(payloadText);
+      } catch {
+        return jsonResponse({ error: "Invalid webhook payload" }, origin, 400);
+      }
+
+      const eventType = event?.type || "";
+      const dataObject = event?.data?.object || {};
+      const userId = dataObject?.client_reference_id || dataObject?.metadata?.user_id || null;
+
+      if (userId) {
+        const status = dataObject?.status || dataObject?.subscription_status || "unknown";
+        const stripeCustomerId = dataObject?.customer || dataObject?.customer_id || null;
+        await supabaseAdminRequest("/rest/v1/subscriptions", env, {
+          method: "POST",
+          headers: { Prefer: "resolution=merge-duplicates" },
+          body: JSON.stringify({
+            user_id: userId,
+            status,
+            plan: "monthly",
+            stripe_customer_id: stripeCustomerId,
+            updated_at: new Date().toISOString()
+          })
+        });
+      }
+
+      return jsonResponse({ received: true, type: eventType }, origin, 200);
+    }
+
+    if (url.pathname === "/auth/status") {
+      if (request.method !== "POST") {
+        return jsonResponse({ error: "Method not allowed" }, origin, 405);
+      }
+      const token = getAuthToken(request);
+      const user = await fetchSupabaseUser(token, env);
+      if (!user) return jsonResponse({ authenticated: false }, origin, 200);
+      const sub = await getSubscriptionRecord(user.id, env);
+      const validated = isSubscriptionActive(sub);
+      return jsonResponse(
+        {
+          authenticated: true,
+          validated,
+          user_id: user.id,
+          email: user.email || "unknown",
+          subscription_status: sub?.status || "unknown"
+        },
+        origin,
+        200
+      );
+    }
+
+    if (url.pathname === "/billing/checkout") {
+      if (request.method !== "POST") {
+        return jsonResponse({ error: "Method not allowed" }, origin, 405);
+      }
+      const token = getAuthToken(request);
+      const user = await fetchSupabaseUser(token, env);
+      if (!user) return jsonResponse({ error: "Unauthorized" }, origin, 401);
+      if (!env.STRIPE_PRICE_ID || !env.STRIPE_SUCCESS_URL || !env.STRIPE_CANCEL_URL) {
+        return jsonResponse({ error: "Billing not configured" }, origin, 500);
+      }
+      const body = new URLSearchParams({
+        mode: "subscription",
+        "line_items[0][price]": env.STRIPE_PRICE_ID,
+        "line_items[0][quantity]": "1",
+        success_url: env.STRIPE_SUCCESS_URL,
+        cancel_url: env.STRIPE_CANCEL_URL,
+        client_reference_id: user.id,
+        customer_email: user.email || ""
+      });
+      const session = await stripeRequest(env, "checkout/sessions", body);
+      if (!session?.url) return jsonResponse({ error: "Unable to create checkout" }, origin, 502);
+      return jsonResponse({ url: session.url }, origin, 200);
+    }
+
+    if (url.pathname === "/billing/portal") {
+      if (request.method !== "POST") {
+        return jsonResponse({ error: "Method not allowed" }, origin, 405);
+      }
+      const token = getAuthToken(request);
+      const user = await fetchSupabaseUser(token, env);
+      if (!user) return jsonResponse({ error: "Unauthorized" }, origin, 401);
+      const sub = await getSubscriptionRecord(user.id, env);
+      const customerId = sub?.stripe_customer_id;
+      if (!customerId || !env.STRIPE_SUCCESS_URL) {
+        return jsonResponse({ error: "Billing not configured" }, origin, 500);
+      }
+      const body = new URLSearchParams({
+        customer: customerId,
+        return_url: env.STRIPE_SUCCESS_URL
+      });
+      const session = await stripeRequest(env, "billing_portal/sessions", body);
+      if (!session?.url) return jsonResponse({ error: "Unable to create portal session" }, origin, 502);
+      return jsonResponse({ url: session.url }, origin, 200);
+    }
+
     if (url.pathname !== "/analyze") {
       return jsonResponse({ error: "Not found" }, origin, 404);
     }
@@ -1080,6 +1275,11 @@ export default {
       seller_description: payload?.seller_description || null,
       about_items: payload?.about_items || []
     };
+
+    const authToken = getAuthToken(request);
+    const authUser = await fetchSupabaseUser(authToken, env);
+    const authSub = authUser ? await getSubscriptionRecord(authUser.id, env) : null;
+    const authValidated = isSubscriptionActive(authSub);
 
     if (!snapshot.year || !snapshot.make) {
       return jsonResponse({ error: "Missing required fields", required: ["year", "make"] }, origin, 400);
@@ -1255,6 +1455,8 @@ export default {
     const final = coerceAndFill(parsed, snapshot);
     const res = jsonResponse(final, origin, 200);
     res.headers.set("X-Cache", "MISS");
+    res.headers.set("X-User-Validated", authValidated ? "true" : "false");
+    if (authUser?.id) res.headers.set("X-User-Id", authUser.id);
 
     ctx?.waitUntil?.(cache.put(cacheKey, res.clone()));
     return res;
