@@ -98,7 +98,7 @@
           <div class="fbco-title">
             <img id="fbco-title-icon" class="fbco-title-icon" alt="Car Spotter" />
             <div class="fbco-title-text">
-              <div class="fbco-title-name">Car Spotter</div>
+              <div class="fbco-title-name">StraightShot Auto</div>
               <div class="fbco-title-sub">Used car snapshot</div>
             </div>
           </div>
@@ -138,9 +138,6 @@
                 <span>Title</span>
                 <strong id="fbco-meta-title-status">—</strong>
               </div>
-            </div>
-            <div class="fbco-confidence-bar">
-              <div id="fbco-confidence-fill" class="fbco-confidence-fill"></div>
             </div>
             <div class="fbco-summary-block" id="fbco-summary-block">
               <div class="fbco-section-label">Summary</div>
@@ -369,7 +366,7 @@
       try {
         const runtime = globalThis.chrome?.runtime;
         if (!runtime?.getURL) return;
-        const iconUrl = runtime.getURL("assets/icon48.png");
+        const iconUrl = runtime.getURL("assets/icon128.png");
         if (titleIcon) titleIcon.src = iconUrl;
         if (miniIcon) miniIcon.src = iconUrl;
       } catch {
@@ -811,7 +808,6 @@
     const risksEl = document.getElementById("fbco-analysis-risks");
     const scoreBadgeEl = document.getElementById("fbco-score-badge");
     const confidenceBadgeEl = document.getElementById("fbco-confidence-badge");
-    const confidenceFillEl = document.getElementById("fbco-confidence-fill");
     const tagsEl = document.getElementById("fbco-analysis-tags");
     const marketEl = document.getElementById("fbco-analysis-market");
     const maintenanceEl = document.getElementById("fbco-analysis-maintenance");
@@ -912,7 +908,15 @@
 
     if (metaPriceEl) metaPriceEl.textContent = window.FBCO_formatUSD(vehicle.price_usd) || "—";
     if (metaMileageEl) metaMileageEl.textContent = window.FBCO_formatMiles(vehicle.mileage_miles) || "—";
-    if (metaTitleEl) metaTitleEl.textContent = vehicle.title_status || "—";
+    if (metaTitleEl) {
+      if (vehicle.title_status) {
+        metaTitleEl.textContent = vehicle.title_status;
+        metaTitleEl.classList.remove("fbco-muted");
+      } else {
+        metaTitleEl.textContent = "Unknown status";
+        metaTitleEl.classList.add("fbco-muted");
+      }
+    }
 
     renderList(maintenanceEl, data?.expected_maintenance_near_term, stringifyMaintenance, {
       wrapper: accMaintenance
@@ -952,9 +956,6 @@
       Number.isFinite(Number(data?.confidence)) ? Math.round(Number(data?.confidence) * 100) : null;
     if (confidenceBadgeEl) {
       confidenceBadgeEl.textContent = conf == null ? "Confidence --" : `Confidence ${conf}%`;
-    }
-    if (confidenceFillEl) {
-      confidenceFillEl.style.width = conf == null ? "0%" : `${conf}%`;
     }
 
     const overviewVisible = repShown || lifespanShown || dailyShown || skillShown || notesShown;

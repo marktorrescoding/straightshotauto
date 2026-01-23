@@ -49,6 +49,8 @@
     const key = buildSnapshotKey(vehicle);
     if (!key) return;
 
+    state.analysisRetrying = false;
+
     if (
       !opts.force &&
       state.lastSnapshotKey === key &&
@@ -128,21 +130,27 @@
 
       if (seq !== state.analysisSeq) return;
       state.lastAnalysis = data;
-      state.analysisReady = true;
+      const complete = isCompleteAnalysis(data);
+      state.analysisReady = complete;
 
-      if (!isCompleteAnalysis(data)) {
+      if (!complete) {
         const retryKey = key;
         if (state.analysisRetryKey !== retryKey) {
           state.analysisRetryKey = retryKey;
           state.analysisRetryCount = 0;
         }
         state.analysisRetryCount = (state.analysisRetryCount || 0) + 1;
-        if (state.analysisRetryCount <= 2) {
-          state.analysisLoading = false;
+        if (state.analysisRetryCount <= 4) {
+          state.analysisRetrying = true;
           state.loadingPhase = "Retrying analysis…";
           setTimeout(() => {
             requestAnalysis(vehicle, { force: true });
           }, 1200);
+        } else {
+          state.analysisRetrying = false;
+          state.analysisError = "Incomplete response";
+          state.analysisErrorAt = Date.now();
+          state.analysisReady = true;
         }
       }
     } catch (err) {
@@ -152,11 +160,14 @@
       } else {
         state.analysisError = err?.message || "Request failed";
       }
+      state.analysisErrorAt = Date.now();
       state.analysisReady = true;
     } finally {
       if (seq !== state.analysisSeq) return;
-      state.analysisLoading = false;
-      state.loadingPhase = "";
+      state.analysisLoading = state.analysisRetrying;
+      if (!state.analysisRetrying) {
+        state.loadingPhase = "";
+      }
       clearTimeout(timeoutId);
       clearTimeout(phaseTimer);
       window.FBCO_updateOverlay(vehicle, {
@@ -206,6 +217,8 @@
       state.lastAnalysis = null;
       state.analysisRetryKey = snapshotKey;
       state.analysisRetryCount = 0;
+      state.analysisRetrying = false;
+      state.analysisErrorAt = null;
       state.analysisLoading = true;
       state.loadingPhase = "Analyzing model…";
       state.lastRenderKey = null;
@@ -234,6 +247,22 @@
     }
 
     if (vehicle?.year && vehicle?.make) {
+      if (state.analysisError && !state.lastAnalysis && !state.analysisLoading) {
+        const lastErrAt = state.analysisErrorAt || 0;
+        if (Date.now() - lastErrAt > 4000) {
+          state.analysisError = null;
+          state.analysisReady = false;
+          state.analysisLoading = true;
+          state.loadingPhase = "Retrying analysis…";
+          requestAnalysis(vehicle, { force: true });
+          return;
+        }
+      }
+      if (state.forceAnalysisNext) {
+        state.forceAnalysisNext = false;
+        requestAnalysis(vehicle, { force: true });
+        return;
+      }
       requestAnalysis(vehicle);
     }
   }
@@ -292,6 +321,7 @@
     state.analysisError = null;
     state.lastAnalysis = null;
     state.analysisReady = false;
+    state.analysisRetrying = false;
     state.lastRenderKey = null;
     state.lastVehicle = null;
     state.loadingPhase = "Parsing listing…";
@@ -315,6 +345,7 @@
       lastUrl = location.href;
 
       if (window.FBCO_STATE) {
+        window.FBCO_STATE.forceAnalysisNext = true;
         window.FBCO_STATE.dismissed = false;
         window.FBCO_STATE.analysisLoading = false;
         window.FBCO_STATE.analysisError = null;

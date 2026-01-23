@@ -1,5 +1,12 @@
 # Release Notes
 
+## 2026-01-22
+- Refined overlay header layout and branding (StraightShot Auto).
+- Improved analysis loading reliability with retries and error states.
+- Added manual refresh control for failed/partial analysis.
+- Swapped in new clipboard icon set for toolbar/overlay.
+- Polished overlay spacing, loaders, and disclaimer placement.
+
 ## 2026-01-20
 - Updated extension icons and header branding.
 - Added a visible bottom-right resize handle.
