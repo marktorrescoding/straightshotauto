@@ -155,16 +155,6 @@
 
           <div class="fbco-tags" id="fbco-analysis-tags"></div>
 
-          <div class="fbco-accordion" id="fbco-acc-upsides">
-            <button class="fbco-accordion-toggle" type="button" data-target="fbco-upsides-body" aria-expanded="false">
-              <span>✅ Upsides</span>
-              <span class="fbco-accordion-icon">▾</span>
-            </button>
-            <div id="fbco-upsides-body" class="fbco-accordion-body" hidden>
-              <ul id="fbco-analysis-upsides" class="fbco-list fbco-list-good"></ul>
-            </div>
-          </div>
-
           <div class="fbco-accordion" id="fbco-acc-overview">
             <button class="fbco-accordion-toggle" type="button" data-target="fbco-overview-body" aria-expanded="false">
               <span>Overview</span>
@@ -221,6 +211,16 @@
             </button>
             <div id="fbco-wear-body" class="fbco-accordion-body" hidden>
               <ul id="fbco-analysis-wear" class="fbco-list"></ul>
+            </div>
+          </div>
+
+          <div class="fbco-accordion" id="fbco-acc-upsides">
+            <button class="fbco-accordion-toggle" type="button" data-target="fbco-upsides-body" aria-expanded="false">
+              <span>✅ Upsides</span>
+              <span class="fbco-accordion-icon">▾</span>
+            </button>
+            <div id="fbco-upsides-body" class="fbco-accordion-body" hidden>
+              <ul id="fbco-analysis-upsides" class="fbco-list fbco-list-good"></ul>
             </div>
           </div>
 

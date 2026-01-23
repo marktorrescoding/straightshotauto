@@ -14,13 +14,13 @@
 
   function parseYearMakeModel(text) {
     const m = text.match(
-      /\b((?:19|20)\d{2})\b\s+([A-Za-z0-9]+)(?:\s+([A-Za-z0-9]+))?(?:\s+([A-Za-z0-9]+))?/
+      /\b((?:19|20)\d{2})\b\s+([A-Za-z0-9]+)(?:\s+([A-Za-z0-9-]+))?(?:\s+([A-Za-z0-9-]+))?(?:\s+([A-Za-z0-9-]+))?/
     );
     if (!m) return null;
 
     const year = m[1];
     const make = m[2];
-    const model = [m[3], m[4]].filter(Boolean).join(" ").trim();
+    const model = [m[3], m[4], m[5]].filter(Boolean).join(" ").trim();
 
     return {
       year,

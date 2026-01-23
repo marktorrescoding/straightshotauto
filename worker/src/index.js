@@ -15,11 +15,15 @@ const SYSTEM_PROMPT =
     "- Keep the verdict aligned with the score (e.g., do not say 'walk away' with a 'Fair/Good' score).",
     "- If data is missing (trim/engine/transmission/drivetrain/service history), explicitly state how uncertainty affects confidence.",
     "",
+    "Lifespan rule:",
+    "- You will be given 'lifespan anchors' (best/avg/worst) for this year/model class. Use them to calibrate remaining_lifespan_estimate,",
+    "  then adjust based on THIS listing’s mileage, service claims, title status, and any active symptoms.",
+    "",
     "Output MUST be valid JSON that matches the schema exactly. No markdown, no extra keys."
   ].join("\n");
 
 const CACHE_TTL_SECONDS = 60 * 60 * 24;
-const CACHE_VERSION = "v6"; // bumped because lifespan logic changed materially
+const CACHE_VERSION = "v7"; // bumped because lifespan output is now model-driven with anchors
 const RATE_MIN_INTERVAL_MS = 5000;
 const RATE_WINDOW_MS = 60 * 60 * 1000;
 const RATE_MAX_REQUESTS = 30;
@@ -219,7 +223,7 @@ function hasRecentMaintenanceClaim(snapshot) {
   const text = normalizeText(
     [snapshot?.seller_description, snapshot?.source_text, ...(snapshot?.about_items || [])].join(" ")
   );
-  return /(recent maintenance|within the last|last \d+\s*(months?|weeks?)|new (thermostat|water pump|radiator|starter|alternator|battery|tires))/i.test(
+  return /(recent maintenance|within the last|last \d+\s*(months?|weeks?)|fresh oil change|new brake pads|full tune-?up|brand new tires|new tires|new (thermostat|water pump|radiator|starter|alternator|battery))/i.test(
     text
   );
 }
@@ -289,7 +293,7 @@ function durabilityBucket(snapshot) {
     (make === "honda" && /(cr-v|pilot|ridgeline)/i.test(model));
 
   const jeepis = make === "jeep";
-  const euro = /(bmw|mercedes|audi|vw|volkswagen|mini)/i.test(make);
+  const euro = /(bmw|mercedes|mercedes-benz|audi|vw|volkswagen|mini)/i.test(make);
 
   if (truckish) return "durable";
   if (euro) return "complex";
@@ -297,81 +301,224 @@ function durabilityBucket(snapshot) {
   return "normal";
 }
 
-function buildLifespanEstimate(out, snapshot) {
-  const milesNow = asNumber(snapshot?.mileage_miles, null);
-  const year = asNumber(snapshot?.year, null);
-  const ageYears = Number.isFinite(year) ? Math.max(0, currentYear() - year) : null;
+function isTruckOrTruckBased(snapshot) {
+  const make = normalizeText(snapshot?.make);
+  const model = normalizeText(snapshot?.model);
+  const source = normalizeText([snapshot?.source_text, snapshot?.seller_description].join(" "));
 
-  const symptom = hasActiveSymptom(snapshot);
-  const recentMaint = hasRecentMaintenanceClaim(snapshot);
-  const records = hasServiceRecordsClaim(snapshot);
-  const bucket = durabilityBucket(snapshot);
+  const truckModels =
+    /(tacoma|tundra|4runner|sequoia|land cruiser|gx|lx|hilux|frontier|titan|ranger|f-?150|f-?250|silverado|sierra|ram|colorado|canyon)/i;
 
-  const bestAssump = records || recentMaint ? "well-maintained, issues addressed" : "well-maintained, no hidden major faults";
-  const avgAssump = "typical wear + some deferred items";
-  const worstAssump = symptom ? "active symptom is major root cause" : "deferred maintenance or hidden issues present";
+  const listingSaysPickupOrTruck = /(pickup|truck)\b/i.test(source);
+  const isJeepTruckish = make === "jeep" && /(wrangler|gladiator)/i.test(model);
 
-  const m = Number.isFinite(milesNow) ? milesNow : 150000;
+  return truckModels.test(model) || listingSaysPickupOrTruck || isJeepTruckish;
+}
 
-  let avgMiles;
-  if (bucket === "durable") avgMiles = m < 150000 ? 60000 : m < 220000 ? 40000 : 25000;
-  else if (bucket === "complex") avgMiles = m < 120000 ? 35000 : m < 180000 ? 25000 : 15000;
-  else if (bucket === "mixed") avgMiles = m < 120000 ? 45000 : m < 200000 ? 30000 : 18000;
-  else avgMiles = m < 150000 ? 50000 : m < 220000 ? 30000 : 20000;
+function scrubUnsupportedDrivetrainQuestion(q, snapshot) {
+  const s = normalizeText(q);
+  if (!s) return q;
 
-  if (Number.isFinite(ageYears)) {
-    if (ageYears >= 25) avgMiles = Math.round(avgMiles * 0.85);
-    else if (ageYears >= 15) avgMiles = Math.round(avgMiles * 0.92);
+  if (isTruckOrTruckBased(snapshot) && /(fwd|awd)/i.test(s) && /(is it|fwd or awd|awd or fwd)/i.test(s)) {
+    return "Is it 2WD or 4WD, and does 4HI/4LO engage smoothly? (transfer case/actuator cost)";
+  }
+  return q;
+}
+
+function scrubTimingBeltQuestion(q, snapshot) {
+  const make = normalizeText(snapshot?.make);
+  const model = normalizeText(snapshot?.model);
+  const s = normalizeText(q);
+
+  const likelyTimingChainToyotaTruck =
+    make === "toyota" && /(tacoma|tundra|4runner|sequoia|land cruiser|gx|lx)/i.test(model);
+
+  if (likelyTimingChainToyotaTruck && /timing belt/i.test(s)) {
+    return "Any timing chain rattle on cold start? (chain/tensioner wear signal)";
   }
 
-  if (recentMaint) avgMiles = Math.round(avgMiles * 1.1);
-  if (records) avgMiles = Math.round(avgMiles * 1.12);
+  if (/timing belt/i.test(s)) {
+    return "Does this engine use a timing belt or chain, and is timing service documented? (avoids wrong maintenance)";
+  }
+
+  return q;
+}
+
+function lifespanBandAnchors(bucket, milesNow) {
+  const m = Number.isFinite(milesNow) ? milesNow : 150000;
+
+  if (bucket === "durable") {
+    if (m < 60000) return { best: 160000, avg: 120000, worst: 30000 };
+    if (m < 120000) return { best: 120000, avg: 80000, worst: 20000 };
+    if (m < 180000) return { best: 80000, avg: 50000, worst: 15000 };
+    return { best: 50000, avg: 30000, worst: 10000 };
+  }
+
+  if (bucket === "complex") {
+    if (m < 60000) return { best: 110000, avg: 80000, worst: 20000 };
+    if (m < 120000) return { best: 80000, avg: 50000, worst: 15000 };
+    if (m < 180000) return { best: 45000, avg: 25000, worst: 12000 };
+    return { best: 25000, avg: 15000, worst: 10000 };
+  }
+
+  if (bucket === "mixed") {
+    if (m < 60000) return { best: 130000, avg: 95000, worst: 25000 };
+    if (m < 120000) return { best: 95000, avg: 65000, worst: 20000 };
+    if (m < 180000) return { best: 60000, avg: 35000, worst: 15000 };
+    return { best: 35000, avg: 20000, worst: 10000 };
+  }
+
+  if (m < 60000) return { best: 140000, avg: 105000, worst: 25000 };
+  if (m < 120000) return { best: 105000, avg: 70000, worst: 20000 };
+  if (m < 180000) return { best: 65000, avg: 40000, worst: 15000 };
+  return { best: 40000, avg: 25000, worst: 10000 };
+}
+
+function milesToYearsRounded(miles, annualMiles) {
+  if (!Number.isFinite(miles) || !Number.isFinite(annualMiles) || annualMiles <= 0) return null;
+  const yrs = miles / annualMiles;
+  return Math.round(yrs * 2) / 2;
+}
+
+function buildLifespanAnchorsForPrompt(snapshot) {
+  const milesNow = asNumber(snapshot?.mileage_miles, null);
+  const bucket = durabilityBucket(snapshot);
+  const annual = annualMilesAssumption(snapshot, bucket);
+
+  const anchors = lifespanBandAnchors(bucket, milesNow);
+
+  const titleStatus = deriveTitleStatus(snapshot);
+  const missingPowertrain = !snapshot?.engine || !snapshot?.transmission;
+  const missingDrivetrain = !snapshot?.drivetrain;
+
+  let penalty = 0;
+  if (missingPowertrain) penalty += 0.12;
+  if (missingDrivetrain) penalty += 0.05;
+  if (titleStatus === "unknown") penalty += 0.06;
+  if (titleStatus === "rebuilt") penalty += 0.2;
+  if (titleStatus === "lien") penalty += 0.1;
+  penalty = Math.min(0.35, penalty);
+
+  const adj = (x) => Math.max(10000, Math.round(x * (1 - penalty)));
+
+  const bestMiles = adj(anchors.best);
+  const avgMiles = adj(anchors.avg);
+  const worstMiles = Math.max(10000, adj(anchors.worst));
+
+  const bestYears = milesToYearsRounded(bestMiles, annual);
+  const avgYears = milesToYearsRounded(avgMiles, annual);
+  const worstYears = milesToYearsRounded(worstMiles, annual);
+
+  return {
+    platform_bucket: bucket,
+    annual_miles_assumption: annual,
+    remaining_miles_anchors: {
+      best_case: bestMiles,
+      average_case: avgMiles,
+      worst_case: worstMiles
+    },
+    time_anchors_years: {
+      best_case: bestYears,
+      average_case: avgYears,
+      worst_case: worstYears
+    },
+    guidance:
+      "Use these as a starting point for remaining_lifespan_estimate. Shorten worst-case materially only if an active symptom exists. " +
+      "If service records are strong, you may move toward best-case; if history is unclear, stay near average."
+  };
+}
+
+function annualMilesAssumption(snapshot, bucket) {
+  const text = normalizeText([snapshot?.seller_description, snapshot?.source_text].join(" "));
+  const lowUse = /(weekend|rarely|seldom|garaged|in town|in-town|short trips)/i.test(text);
+  if (lowUse) return 9000;
+
+  if (bucket === "durable") return 12000;
+  if (bucket === "complex") return 10000;
+  return 11000;
+}
+
+function targetEndMileage(bucket) {
+  if (bucket === "durable") return 250000;
+  if (bucket === "mixed") return 200000;
+  if (bucket === "complex") return 170000;
+  return 200000;
+}
+
+function buildLifespanEstimate(out, snapshot) {
+  const milesNow = asNumber(snapshot?.mileage_miles, null);
+  const m = Number.isFinite(milesNow) ? milesNow : 150000;
+
+  const symptom = hasActiveSymptom(snapshot);
+  const bucket = durabilityBucket(snapshot);
+  const recentMaint = hasRecentMaintenanceClaim(snapshot);
+  const records = hasServiceRecordsClaim(snapshot);
+  const titleStatus = deriveTitleStatus(snapshot);
 
   const missingPowertrain = !snapshot?.engine || !snapshot?.transmission;
   const missingDrivetrain = !snapshot?.drivetrain;
-  const infoPenalty = (missingPowertrain ? 0.12 : 0) + (missingDrivetrain ? 0.05 : 0);
-  if (infoPenalty > 0) avgMiles = Math.round(avgMiles * (1 - infoPenalty));
+  const infoPenalty = (missingPowertrain ? 0.15 : 0) + (missingDrivetrain ? 0.05 : 0);
+  const titlePenalty =
+    titleStatus === "rebuilt" ? 0.25 : titleStatus === "lien" ? 0.1 : titleStatus === "unknown" ? 0.08 : 0;
+  const symptomPenalty = symptom ? 0.45 : 0;
+  const penalty = Math.min(
+    0.75,
+    infoPenalty + titlePenalty + symptomPenalty + (records ? -0.1 : 0) + (recentMaint ? -0.05 : 0)
+  );
 
-  let avgMonths = avgMiles >= 50000 ? 30 : avgMiles >= 30000 ? 18 : 12;
-  if (Number.isFinite(ageYears) && ageYears >= 25) avgMonths = Math.min(avgMonths, 24);
-  if (Number.isFinite(ageYears) && ageYears >= 30) avgMonths = Math.min(avgMonths, 18);
+  const end = targetEndMileage(bucket);
+  let avgMiles = Math.max(12000, end - m);
+  avgMiles = Math.max(5000, Math.round(avgMiles * (1 - penalty)));
 
-  let bestMiles = Math.round(avgMiles * 1.6);
-  let bestMonths = Math.round(avgMonths * 1.6);
-
-  let worstMiles = Math.round(avgMiles * (symptom ? 0.25 : 0.6));
-  let worstMonths = Math.round(avgMonths * (symptom ? 0.25 : 0.6));
+  let bestMiles = Math.round(avgMiles * (records || recentMaint ? 1.25 : 1.15));
+  let worstMiles = Math.round(avgMiles * (symptom ? 0.25 : 0.55));
 
   if (!symptom) {
     worstMiles = Math.max(worstMiles, 10000);
-    worstMonths = Math.max(worstMonths, 12);
   } else {
-    worstMiles = Math.max(0, Math.min(worstMiles, 5000));
-    worstMonths = Math.max(0, Math.min(worstMonths, 3));
+    worstMiles = Math.min(worstMiles, 5000);
   }
 
   if (m >= 250000) {
     bestMiles = Math.min(bestMiles, 30000);
-    bestMonths = Math.min(bestMonths, 18);
     avgMiles = Math.min(avgMiles, 20000);
-    avgMonths = Math.min(avgMonths, 12);
     worstMiles = Math.min(worstMiles, symptom ? 3000 : 10000);
-    worstMonths = Math.min(worstMonths, symptom ? 3 : 12);
   }
 
-  avgMiles = Math.min(avgMiles, bestMiles);
+  const annual = annualMilesAssumption(snapshot, bucket);
+  const milesToMonths = (mi) => Math.round((mi / Math.max(6000, annual)) * 12);
+
+  let avgMonths = milesToMonths(avgMiles);
+  let bestMonths = milesToMonths(bestMiles);
+  let worstMonths = milesToMonths(worstMiles);
+
+  if (!symptom) {
+    worstMonths = Math.max(worstMonths, 12);
+  } else {
+    worstMonths = Math.min(worstMonths, 3);
+  }
+
+  bestMiles = Math.max(bestMiles, avgMiles);
   worstMiles = Math.min(worstMiles, avgMiles);
 
-  avgMonths = Math.min(avgMonths, bestMonths);
+  bestMonths = Math.max(bestMonths, avgMonths);
   worstMonths = Math.min(worstMonths, avgMonths);
 
   bestMiles = clampInt(bestMiles, 0, 150000) ?? bestMiles;
   avgMiles = clampInt(avgMiles, 0, bestMiles) ?? avgMiles;
   worstMiles = clampInt(worstMiles, 0, avgMiles) ?? worstMiles;
 
-  bestMonths = clampInt(bestMonths, 0, 120) ?? bestMonths;
+  bestMonths = clampInt(bestMonths, 0, 180) ?? bestMonths;
   avgMonths = clampInt(avgMonths, 0, bestMonths) ?? avgMonths;
   worstMonths = clampInt(worstMonths, 0, avgMonths) ?? worstMonths;
+
+  const bestAssump = records
+    ? "well-maintained + records"
+    : recentMaint
+      ? "well-maintained + recent service"
+      : "well-maintained";
+  const avgAssump = "typical upkeep at this mileage";
+  const worstAssump = symptom ? "active symptom is major fault" : "deferred maintenance/hidden issues";
 
   out.remaining_lifespan_estimate =
     `Best-case: ${formatMiles(bestMiles)} / ${formatMonths(bestMonths)} (${bestAssump})\n` +
@@ -458,15 +605,24 @@ function ensureBuyerQuestions(out, snapshot, titleStatus) {
   base.forEach((q) => addUnique(list, q));
 
   const candidates = [];
-  if (!snapshot?.drivetrain) candidates.push("Is it FWD or AWD? (parts/maintenance differ)");
+  const make = normalizeText(snapshot?.make);
+  if (!snapshot?.drivetrain) {
+    if (isTruckOrTruckBased(snapshot)) {
+      candidates.push("Is it 2WD or 4WD, and does 4HI/4LO engage smoothly? (transfer case/actuator cost)");
+    } else {
+      const example = make.includes("mercedes") ? " (e.g., 4MATIC)" : "";
+      candidates.push(`Is it FWD or AWD${example}? (changes maintenance/traction)`);
+    }
+  }
   if (!snapshot?.transmission || !snapshot?.engine) {
-    candidates.push("Which transmission/engine is it? (changes risk profile)");
+    candidates.push("Which transmission/engine is it exactly? (changes risk profile)");
   }
-  if (sellerText.includes("battery")) {
-    candidates.push("Has the alternator/charging system been tested? (battery issues repeat)");
+  if (/new brake pads/i.test(sellerText)) {
+    candidates.push("Were rotors resurfaced/replaced with the pads? (prevents vibration)");
+    candidates.push("Has brake fluid been flushed recently? (moisture corrosion risk)");
   }
-  if (sellerText.includes("new tires") || sellerText.includes("tires")) {
-    candidates.push("Any recent alignment/suspension work after tire replacement? (prevents uneven wear)");
+  if (/brand new|new tires|continental/i.test(sellerText)) {
+    candidates.push("Any alignment done after tire install? (prevents uneven wear)");
   }
   if (sellerText.includes("ac") || sellerText.includes("a/c")) {
     candidates.push("Does the A/C blow cold at idle? (compressor/charge check)");
@@ -475,10 +631,10 @@ function ensureBuyerQuestions(out, snapshot, titleStatus) {
     candidates.push("If automatic, when was the transmission fluid serviced? (120k+ wear item)");
   }
   if (titleStatus === "unknown") {
-    candidates.push("Can you provide the VIN and title status? (history/resale impact)");
+    candidates.push("Can you provide VIN + title status details? (history/resale impact)");
   }
-  candidates.push("Any recent engine or transmission work? (core reliability)");
-  candidates.push("Any drivetrain noises or clunks? (diff/axle wear)");
+  candidates.push("Any oil leaks after a warm idle? (hidden engine wear)");
+  candidates.push("Any drivetrain noises on turns/accel? (axle/diff wear)");
 
   // Ensure at least 2 component-specific questions.
   let componentCount = list.filter(isComponentSpecific).length;
@@ -494,15 +650,12 @@ function ensureBuyerQuestions(out, snapshot, titleStatus) {
     if (list.length >= 7) break;
     addUnique(list, q);
   }
-  if (list.length < 4) {
-    addUnique(list, "Any warning lights or codes present? (hidden faults)");
-    addUnique(list, "Any recent suspension or steering repairs? (safety/wear)");
-  }
-  while (list.length < 4) {
-    addUnique(list, "Any recent fluid services? (maintenance baseline)");
-  }
+  while (list.length < 4) addUnique(list, "Any warning lights or stored codes? (hidden faults)");
 
-  out.buyer_questions = list.slice(0, 7);
+  out.buyer_questions = list
+    .slice(0, 7)
+    .map((q) => scrubUnsupportedDrivetrainQuestion(q, snapshot))
+    .map((q) => scrubTimingBeltQuestion(q, snapshot));
 }
 
 function sharpenRiskFlags(out, snapshot, titleStatus) {
@@ -577,6 +730,98 @@ function fixWearItemCosts(out, snapshot) {
       estimated_cost_shop: "$700–$1,300"
     };
   });
+}
+
+function applyCompletedServiceOverrides(out, snapshot) {
+  const t = normalizeText([snapshot?.seller_description, snapshot?.source_text, ...(snapshot?.about_items || [])].join(" "));
+
+  const hasNewTires =
+    /(brand new|new)\s+(tires|tyres)/i.test(t) ||
+    /(continental)\s+(pro contact|procontact)/i.test(t) ||
+    /(same ones it came with)/i.test(t);
+
+  const hasNewPads = /(new|brand new)\s+brake\s+pads/i.test(t) || /(fresh)\s+brake\s+pads/i.test(t);
+  const hasFreshOil = /(fresh)\s+oil\s+change|oil\s+change\s*(done|completed)?/i.test(t);
+  const hasTuneUp = /(full\s+tune-?up|tune-?up)/i.test(t);
+
+  out.wear_items = asArray(out.wear_items).map((x) => {
+    if (!x?.item) return x;
+    const item = normalizeText(x.item);
+
+    if (hasNewTires && /tire|tyre/.test(item)) {
+      return {
+        ...x,
+        item: "Tires (new per seller — verify receipt/date)",
+        typical_mileage_range: "Now",
+        why_it_matters: "Confirms install + correct spec",
+        estimated_cost_diy: "$0–$50 (inspect/rotate only)",
+        estimated_cost_shop: "$40–$120"
+      };
+    }
+
+    if (hasNewPads && /brake\s*pads?/.test(item)) {
+      return {
+        ...x,
+        item: "Brake pads (new per seller — verify receipt/date)",
+        typical_mileage_range: "Now",
+        why_it_matters: "Confirms quality + proper bedding",
+        estimated_cost_diy: "$0–$50 (inspect only)",
+        estimated_cost_shop: "$50–$150"
+      };
+    }
+
+    return x;
+  });
+
+  const dropIf = (s, re) => re.test(normalizeText(s));
+  out.risk_flags = asArray(out.risk_flags)
+    .map((s) => asString(s, ""))
+    .filter(Boolean)
+    .filter((rf) => {
+      if (hasNewTires && dropIf(rf, /(tire|tyre).*(replace|replacement|needed soon|due)/i)) return false;
+      if (hasNewPads && dropIf(rf, /(brake).*(pads?).*(replace|replacement|needed soon|due)/i)) return false;
+      return true;
+    });
+
+  const addChecklist = (line) => {
+    const key = normalizeText(line);
+    const exists = asArray(out.inspection_checklist).some((x) => normalizeText(x) === key);
+    if (!exists) out.inspection_checklist.unshift(line);
+  };
+
+  if (hasNewTires) addChecklist("Verify tire install date/receipt + check even wear (confirms alignment/suspension)");
+  if (hasNewPads) addChecklist("Verify brake pad/rotor condition + test for pulsation (quality of brake job)");
+  if (hasFreshOil) addChecklist("Confirm oil type/spec + look for leaks after warm idle (baseline health)");
+  if (hasTuneUp) addChecklist("Ask what ‘tune-up’ included (plugs/filters/fluids) and verify receipts");
+
+  const ensureQuestion = (q) => {
+    const key = normalizeText(q);
+    if (!asArray(out.buyer_questions).some((x) => normalizeText(x) === key)) out.buyer_questions.push(q);
+  };
+
+  if (hasNewTires) ensureQuestion("Do you have the tire invoice and install date? (confirms warranty/spec)");
+  if (hasNewPads) ensureQuestion("Were rotors resurfaced/replaced with the pads? (prevents vibration)");
+  if (hasTuneUp) ensureQuestion("What did the ‘full tune-up’ include exactly? (avoids vague claims)");
+
+  out.buyer_questions = asArray(out.buyer_questions).slice(0, 7);
+}
+
+function dropGenericOilChangeFromNearTerm(out, snapshot) {
+  const sellerText = normalizeText([snapshot?.seller_description, snapshot?.source_text].join(" "));
+  const sellerMentionsFreshOil = /(fresh)\s+oil\s+change|oil\s+change\s*(done|completed|recent)/i.test(sellerText);
+
+  const items = asArray(out.expected_maintenance_near_term);
+  if (!items.length || sellerMentionsFreshOil) return;
+
+  const isGenericOil = (x) => {
+    const item = normalizeText(x?.item);
+    const why = normalizeText(x?.why_it_matters);
+    const range = normalizeText(x?.typical_mileage_range);
+    return /oil\s+change/.test(item) || /5,?000|7,?500/.test(range) || /engine longevity/.test(why);
+  };
+
+  const kept = items.filter((x) => !isGenericOil(x));
+  if (kept.length >= 1) out.expected_maintenance_near_term = kept;
 }
 
 function replaceSpeculativeCELMaintenance(out, snapshot) {
@@ -689,11 +934,12 @@ function coerceAndFill(raw, snapshot) {
   const derivedTitleStatus = ensureTitleConsistency(out, snapshot);
   fixKnownMaintenance(out, snapshot);
   replaceSpeculativeCELMaintenance(out, snapshot);
+  fixWearItemCosts(out, snapshot);
+  applyCompletedServiceOverrides(out, snapshot);
+  dropGenericOilChangeFromNearTerm(out, snapshot);
   ensureBuyerQuestions(out, snapshot, derivedTitleStatus);
   sharpenRiskFlags(out, snapshot, derivedTitleStatus);
   groundReputation(out);
-  fixWearItemCosts(out, snapshot);
-  buildLifespanEstimate(out, snapshot);
   normalizeLifespanEstimate(out, snapshot);
   applyExtremeMileageCaps(out, snapshot);
 
@@ -839,6 +1085,8 @@ export default {
       return jsonResponse({ error: "Missing required fields", required: ["year", "make"] }, origin, 400);
     }
 
+    const lifespanAnchors = buildLifespanAnchorsForPrompt(snapshot);
+
     const snapshotKey = await hashString(JSON.stringify(snapshot));
     const cacheKey = new Request(`https://cache.car-bot.local/analyze/${CACHE_VERSION}/${snapshotKey}`);
     const cache = caches.default;
@@ -877,6 +1125,9 @@ export default {
       "",
       "Snapshot JSON:",
       JSON.stringify(snapshot, null, 2),
+      "",
+      "Lifespan anchors (use to calibrate remaining_lifespan_estimate; adjust for THIS listing):",
+      JSON.stringify(lifespanAnchors, null, 2),
       "",
       "Requirements:",
       "- Give a clear recommendation: buy / conditional buy / avoid, and explain the reason in plain language.",
