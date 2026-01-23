@@ -1,6 +1,6 @@
-# Car Spotter
+# StraightShot Auto
 
-Car Spotter is a Chrome extension that adds an analysis overlay to Facebook Marketplace vehicle listings. It extracts listing details (year, make, model, price, mileage, and specs) and sends a snapshot to a backend service that returns structured insights, risk flags, and a rating.
+StraightShot Auto is a Chrome extension that adds an analysis overlay to Facebook Marketplace vehicle listings. It extracts listing details (year, make, model, price, mileage, and specs) and sends a snapshot to a backend service that returns structured insights, risk flags, and a rating.
 
 ## Features
 - Listing snapshot extraction

@@ -93,10 +93,10 @@
     root.id = overlayId;
 
     root.innerHTML = `
-      <div class="fbco-panel" id="fbco-panel" role="dialog" aria-label="Car Spotter">
+      <div class="fbco-panel" id="fbco-panel" role="dialog" aria-label="StraightShot Auto">
         <div class="fbco-header" id="fbco-drag-handle">
           <div class="fbco-title">
-            <img id="fbco-title-icon" class="fbco-title-icon" alt="Car Spotter" />
+            <img id="fbco-title-icon" class="fbco-title-icon" alt="StraightShot Auto" />
             <div class="fbco-title-text">
               <div class="fbco-title-name">StraightShot Auto</div>
               <div class="fbco-title-sub">Used car snapshot</div>
@@ -368,7 +368,7 @@
 
       <!-- Minimized icon -->
       <button class="fbco-mini" id="fbco-mini" type="button" title="Show car info" aria-label="Show car info">
-        <img id="fbco-mini-icon" class="fbco-mini-icon" alt="Car Spotter" />
+        <img id="fbco-mini-icon" class="fbco-mini-icon" alt="StraightShot Auto" />
       </button>
     `;
 
