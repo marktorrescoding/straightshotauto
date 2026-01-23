@@ -41,5 +41,19 @@ Notes:
 - You must create a Chrome Web Store API project and OAuth credentials to get the client ID/secret and refresh token.
 - Ensure `manifest.json` version is bumped before pushing to `main`.
 
+## Trigger the Publish Workflow
+You can trigger the workflow from the GitHub UI or from the terminal.
+
+GitHub UI:
+1) Go to the Actions tab
+2) Open "Publish Chrome Extension"
+3) Click "Run workflow" and select `main`
+
+Terminal (GitHub CLI):
+```bash
+gh workflow run "Publish Chrome Extension" --ref main
+gh run watch
+```
+
 ## Notes
 This extension runs only on Facebook Marketplace item pages.
