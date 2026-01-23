@@ -1,8 +1,6 @@
 (() => {
   const { overlayId } = window.FBCO_STATE;
 
-  window.FBCO_STATE.dismissed = false;
-
   const STORE_KEY = "fbco.overlay.state.v6";
   const DEFAULT_STATE = {
     top: 16,
@@ -32,6 +30,12 @@
   }
 
   function applyOverlayState(root, state) {
+    const maxW = Math.max(MIN_W, window.innerWidth - 24);
+    const maxH = Math.max(MIN_H, window.innerHeight - 24);
+
+    state.width = clamp(state.width, MIN_W, maxW);
+    state.height = clamp(state.height, MIN_H, maxH);
+
     root.style.top = `${state.top}px`;
 
     if (state.left == null) {
@@ -65,6 +69,14 @@
 
   function removeOverlay() {
     const el = document.getElementById(overlayId);
+    if (window.FBCO_STATE._cleanupFns) {
+      window.FBCO_STATE._cleanupFns.forEach((fn) => {
+        try {
+          fn();
+        } catch {}
+      });
+      window.FBCO_STATE._cleanupFns = null;
+    }
     if (el) el.remove();
   }
   window.FBCO_removeOverlay = removeOverlay;
@@ -81,142 +93,189 @@
     root.id = overlayId;
 
     root.innerHTML = `
-      <!-- Full panel -->
-      <div class="fbco-panel" id="fbco-panel">
+      <div class="fbco-panel" id="fbco-panel" role="dialog" aria-label="Car Spotter">
         <div class="fbco-header" id="fbco-drag-handle">
           <div class="fbco-title">
             <img id="fbco-title-icon" class="fbco-title-icon" alt="Car Spotter" />
-            <span>Car Spotter</span>
+            <div class="fbco-title-text">
+              <div class="fbco-title-name">Car Spotter</div>
+              <div class="fbco-title-sub">Used car snapshot</div>
+            </div>
           </div>
           <div class="fbco-actions">
-            <button id="fbco-minimize" class="fbco-icon-btn" type="button" title="Minimize">–</button>
-            <button id="fbco-close" class="fbco-icon-btn" type="button" title="Close">×</button>
+            <button id="fbco-refresh" class="fbco-icon-btn" type="button" aria-label="Refresh" title="Refresh">↻</button>
+            <button id="fbco-minimize" class="fbco-icon-btn" type="button" aria-label="Minimize" title="Minimize">–</button>
+            <button id="fbco-close" class="fbco-icon-btn" type="button" aria-label="Close" title="Close">×</button>
           </div>
         </div>
 
         <div class="fbco-body" id="fbco-body">
           <div class="fbco-loading" id="fbco-loading">
-            <div class="fbco-loading-track" aria-hidden="true">
-              <span class="fbco-loading-car">🚗</span>
-            </div>
-            <div class="fbco-loading-text">Analyzing…</div>
+            <div class="fbco-loading-spinner" aria-hidden="true"></div>
+            <div class="fbco-loading-text" id="fbco-loading-text">Analyzing…</div>
           </div>
 
-          <div class="fbco-vehicle-title" id="fbco-vehicle-title">—</div>
+          <div class="fbco-error" id="fbco-error" role="status" aria-live="polite"></div>
 
-          <div class="fbco-spectrum fbco-spectrum-top">
-            <div class="fbco-spectrum-header">
-              <div class="fbco-spectrum-label">Overall rating</div>
-              <div class="fbco-spectrum-values">
-                <div id="fbco-score-value" class="fbco-score-value">--</div>
-                <div id="fbco-confidence" class="fbco-confidence">Confidence: --</div>
+          <div class="fbco-card fbco-card-primary" id="fbco-summary-card">
+            <div class="fbco-card-header">
+              <div class="fbco-vehicle-title" id="fbco-vehicle-title">—</div>
+              <div class="fbco-badges">
+                <span id="fbco-score-badge" class="fbco-badge">--</span>
+                <span id="fbco-confidence-badge" class="fbco-badge fbco-badge-muted">--</span>
               </div>
             </div>
-            <div class="fbco-spectrum-bar">
-              <div id="fbco-spectrum-marker" class="fbco-spectrum-marker"></div>
+            <div class="fbco-meta-row">
+              <div class="fbco-meta-item">
+                <span>Price</span>
+                <strong id="fbco-meta-price">—</strong>
+              </div>
+              <div class="fbco-meta-item">
+                <span>Mileage</span>
+                <strong id="fbco-meta-mileage">—</strong>
+              </div>
+              <div class="fbco-meta-item">
+                <span>Title</span>
+                <strong id="fbco-meta-title-status">—</strong>
+              </div>
             </div>
-            <div class="fbco-spectrum-scale">
-              <span>❌ No</span>
-              <span>⚠️ Risky</span>
-              <span>⚖️ Fair</span>
-              <span>👍 Good</span>
-              <span>💎 Great</span>
-              <span>🚀 Steal</span>
+            <div class="fbco-confidence-bar">
+              <div id="fbco-confidence-fill" class="fbco-confidence-fill"></div>
+            </div>
+            <div class="fbco-summary-block" id="fbco-summary-block">
+              <div class="fbco-section-label">Summary</div>
+              <div id="fbco-summary" class="fbco-text">—</div>
+            </div>
+            <div class="fbco-summary-block" id="fbco-verdict-block">
+              <div class="fbco-section-label">Final verdict</div>
+              <div id="fbco-final-verdict" class="fbco-text">—</div>
             </div>
           </div>
 
-          <div class="fbco-block">
-            <div class="fbco-label">Summary</div>
-            <div id="fbco-summary" class="fbco-text">(none)</div>
+          <div class="fbco-tags" id="fbco-analysis-tags"></div>
+
+          <div class="fbco-accordion" id="fbco-acc-overview">
+            <button class="fbco-accordion-toggle" type="button" data-target="fbco-overview-body" aria-expanded="false">
+              <span>Overview</span>
+              <span class="fbco-accordion-icon">▾</span>
+            </button>
+            <div id="fbco-overview-body" class="fbco-accordion-body" hidden>
+              <div class="fbco-kv" id="fbco-kv-rep">
+                <span>Year/model reputation</span>
+                <div id="fbco-year-rep" class="fbco-text">—</div>
+              </div>
+              <div class="fbco-kv" id="fbco-kv-lifespan">
+                <span>Remaining lifespan</span>
+                <div id="fbco-lifespan" class="fbco-text">—</div>
+              </div>
+              <div class="fbco-kv" id="fbco-kv-daily">
+                <span>Daily vs project</span>
+                <div id="fbco-daily-project" class="fbco-text">—</div>
+              </div>
+              <div class="fbco-kv" id="fbco-kv-skill">
+                <span>Mechanical skill</span>
+                <div id="fbco-skill" class="fbco-text">—</div>
+              </div>
+              <div class="fbco-kv" id="fbco-notes-block">
+                <span>Notes</span>
+                <div id="fbco-notes" class="fbco-text">—</div>
+              </div>
+            </div>
           </div>
 
-          <div class="fbco-block">
-            <div class="fbco-label">Final verdict</div>
-            <div id="fbco-final-verdict" class="fbco-text">(none)</div>
+          <div class="fbco-accordion" id="fbco-acc-maintenance">
+            <button class="fbco-accordion-toggle" type="button" data-target="fbco-maintenance-body" aria-expanded="true">
+              <span>Likely maintenance (6–18 months)</span>
+              <span class="fbco-accordion-icon">▾</span>
+            </button>
+            <div id="fbco-maintenance-body" class="fbco-accordion-body">
+              <ul id="fbco-analysis-maintenance" class="fbco-list"></ul>
+            </div>
           </div>
 
-          <div class="fbco-block">
-            <div class="fbco-label">Year/model reputation</div>
-            <div id="fbco-year-rep" class="fbco-text">(none)</div>
+          <div class="fbco-accordion" id="fbco-acc-common">
+            <button class="fbco-accordion-toggle" type="button" data-target="fbco-common-body" aria-expanded="false">
+              <span>Common issues</span>
+              <span class="fbco-accordion-icon">▾</span>
+            </button>
+            <div id="fbco-common-body" class="fbco-accordion-body" hidden>
+              <ul id="fbco-analysis-issues" class="fbco-list"></ul>
+            </div>
           </div>
 
-          <div class="fbco-block">
-            <div class="fbco-label">Remaining lifespan</div>
-            <div id="fbco-lifespan" class="fbco-text">(none)</div>
+          <div class="fbco-accordion" id="fbco-acc-wear">
+            <button class="fbco-accordion-toggle" type="button" data-target="fbco-wear-body" aria-expanded="false">
+              <span>Wear items</span>
+              <span class="fbco-accordion-icon">▾</span>
+            </button>
+            <div id="fbco-wear-body" class="fbco-accordion-body" hidden>
+              <ul id="fbco-analysis-wear" class="fbco-list"></ul>
+            </div>
           </div>
 
-          <div class="fbco-block">
-            <div class="fbco-label">Daily vs project</div>
-            <div id="fbco-daily-project" class="fbco-text">(none)</div>
+          <div class="fbco-accordion" id="fbco-acc-risk">
+            <button class="fbco-accordion-toggle" type="button" data-target="fbco-risk-body" aria-expanded="false">
+              <span>Risk flags</span>
+              <span class="fbco-accordion-icon">▾</span>
+            </button>
+            <div id="fbco-risk-body" class="fbco-accordion-body" hidden>
+              <ul id="fbco-analysis-risks" class="fbco-list"></ul>
+            </div>
           </div>
 
-          <div class="fbco-block">
-            <div class="fbco-label">Mechanical skill</div>
-            <div id="fbco-skill" class="fbco-text">(none)</div>
+          <div class="fbco-accordion" id="fbco-acc-deal">
+            <button class="fbco-accordion-toggle" type="button" data-target="fbco-deal-body" aria-expanded="false">
+              <span>Deal breakers</span>
+              <span class="fbco-accordion-icon">▾</span>
+            </button>
+            <div id="fbco-deal-body" class="fbco-accordion-body" hidden>
+              <ul id="fbco-analysis-dealbreakers" class="fbco-list"></ul>
+            </div>
           </div>
 
-          <div class="fbco-block">
-            <div id="fbco-analysis-tags" class="fbco-tags"></div>
+          <div class="fbco-accordion" id="fbco-acc-inspection">
+            <button class="fbco-accordion-toggle" type="button" data-target="fbco-inspection-body" aria-expanded="false">
+              <span>Inspection checklist</span>
+              <span class="fbco-accordion-icon">▾</span>
+            </button>
+            <div id="fbco-inspection-body" class="fbco-accordion-body" hidden>
+              <ul id="fbco-analysis-checklist" class="fbco-list"></ul>
+            </div>
           </div>
 
-          <div class="fbco-block">
-            <div class="fbco-label">Likely maintenance</div>
-            <ul id="fbco-analysis-maintenance" class="fbco-list"></ul>
+          <div class="fbco-accordion" id="fbco-acc-questions">
+            <button class="fbco-accordion-toggle" type="button" data-target="fbco-questions-body" aria-expanded="false">
+              <span>Buyer questions</span>
+              <span class="fbco-accordion-icon">▾</span>
+            </button>
+            <div id="fbco-questions-body" class="fbco-accordion-body" hidden>
+              <ul id="fbco-analysis-questions" class="fbco-list fbco-list-pill"></ul>
+            </div>
           </div>
 
-          <div class="fbco-block">
-            <div class="fbco-label">Common issues</div>
-            <ul id="fbco-analysis-issues" class="fbco-list"></ul>
+          <div class="fbco-accordion" id="fbco-acc-market">
+            <button class="fbco-accordion-toggle" type="button" data-target="fbco-market-body" aria-expanded="false">
+              <span>Market value & price opinion</span>
+              <span class="fbco-accordion-icon">▾</span>
+            </button>
+            <div id="fbco-market-body" class="fbco-accordion-body" hidden>
+              <div class="fbco-kv">
+                <span>Market value</span>
+                <div id="fbco-analysis-market" class="fbco-text">—</div>
+              </div>
+              <div class="fbco-kv">
+                <span>Price opinion</span>
+                <div id="fbco-analysis-price" class="fbco-text">—</div>
+              </div>
+            </div>
           </div>
 
-          <div class="fbco-block">
-            <div class="fbco-label">Wear items to expect</div>
-            <ul id="fbco-analysis-wear" class="fbco-list"></ul>
-          </div>
-
-          <div class="fbco-block">
-            <div class="fbco-label">Upsides</div>
-            <ul id="fbco-analysis-upsides" class="fbco-list"></ul>
-          </div>
-
-          <div class="fbco-block">
-            <div class="fbco-label">Inspection checks</div>
-            <ul id="fbco-analysis-checklist" class="fbco-list"></ul>
-          </div>
-
-          <div class="fbco-block">
-            <div class="fbco-label">Buyer questions</div>
-            <ul id="fbco-analysis-questions" class="fbco-list fbco-list-pill"></ul>
-          </div>
-
-          <div class="fbco-block">
-            <div class="fbco-label">Market value</div>
-            <div id="fbco-analysis-market" class="fbco-value">(estimate)</div>
-          </div>
-
-          <div class="fbco-block">
-            <div class="fbco-label">Price opinion</div>
-            <div id="fbco-analysis-price" class="fbco-value">(none)</div>
-          </div>
-
-          <div class="fbco-block">
-            <div class="fbco-label">Deal breakers</div>
-            <ul id="fbco-analysis-dealbreakers" class="fbco-list"></ul>
-          </div>
-
-          <div class="fbco-block">
-            <div class="fbco-label">Risk flags</div>
-            <ul id="fbco-analysis-risks" class="fbco-list"></ul>
-          </div>
-
-          <div class="fbco-divider"></div>
-
-          <div class="fbco-section-header">
-            <button id="fbco-details-toggle" class="fbco-link-btn" type="button">Show</button>
-            <div class="fbco-section-title">Listing details</div>
-          </div>
-
-          <div id="fbco-details-section" class="fbco-collapsible" data-collapsed="1">
+          <div class="fbco-accordion" id="fbco-acc-details">
+            <button class="fbco-accordion-toggle" type="button" data-target="fbco-details-body" aria-expanded="false">
+              <span>Listing details</span>
+              <span class="fbco-accordion-icon">▾</span>
+            </button>
+            <div id="fbco-details-body" class="fbco-accordion-body" hidden>
             <div class="fbco-row">
               <div class="fbco-label">Parsed</div>
               <div class="fbco-val"><span id="fbco-parsed-value" class="fbco-value">Detecting…</span></div>
@@ -319,13 +378,17 @@
     };
     setIcons();
 
+    const cleanupFns = [];
+
     // Only stop propagation for non-pointer events.
     // Pointer events are used for drag and must work reliably.
     ["click", "dblclick", "contextmenu", "keydown", "keyup"].forEach((evt) => {
-      root.addEventListener(evt, (e) => e.stopPropagation(), false);
+      const handler = (e) => e.stopPropagation();
+      root.addEventListener(evt, handler, false);
+      cleanupFns.push(() => root.removeEventListener(evt, handler, false));
     });
 
-    root.addEventListener("click", (e) => {
+    const clickHandler = (e) => {
       const target = e.target;
       if (!target) return;
       const btn = target.closest("[data-fbco-message]");
@@ -333,62 +396,85 @@
       const message = btn.dataset.fbcoMessage;
       if (!message) return;
       window.FBCO_insertMessage && window.FBCO_insertMessage(message);
-    });
+    };
+    root.addEventListener("click", clickHandler);
+    cleanupFns.push(() => root.removeEventListener("click", clickHandler));
 
     // Selecting value pills pauses updates
-    root.addEventListener("pointerdown", (e) => {
+    const pointerDownHandler = (e) => {
       const t = e.target;
       if (t && t.classList && t.classList.contains("fbco-value")) {
         window.FBCO_STATE.isUserSelecting = true;
       } else {
         window.FBCO_STATE.isUserSelecting = false;
       }
-    });
+    };
+    root.addEventListener("pointerdown", pointerDownHandler);
+    cleanupFns.push(() => root.removeEventListener("pointerdown", pointerDownHandler));
 
-    window.addEventListener(
-      "pointerup",
-      () => {
-        window.FBCO_STATE.isUserSelecting = false;
-      },
-      true
-    );
-    window.addEventListener(
-      "pointercancel",
-      () => {
-        window.FBCO_STATE.isUserSelecting = false;
-      },
-      true
-    );
+    const pointerUpHandler = () => {
+      window.FBCO_STATE.isUserSelecting = false;
+    };
+    window.addEventListener("pointerup", pointerUpHandler, true);
+    window.addEventListener("pointercancel", pointerUpHandler, true);
+    cleanupFns.push(() => window.removeEventListener("pointerup", pointerUpHandler, true));
+    cleanupFns.push(() => window.removeEventListener("pointercancel", pointerUpHandler, true));
 
     // Close
-    root.querySelector("#fbco-close")?.addEventListener("click", (e) => {
+    const closeBtn = root.querySelector("#fbco-close");
+    const onClose = (e) => {
       e.stopPropagation();
       window.FBCO_STATE.dismissed = true;
       removeOverlay();
-    });
+    };
+    closeBtn?.addEventListener("click", onClose);
+    if (closeBtn) cleanupFns.push(() => closeBtn.removeEventListener("click", onClose));
 
     // Minimize (icon mode)
-    root.querySelector("#fbco-minimize")?.addEventListener("click", (e) => {
+    const minimizeBtn = root.querySelector("#fbco-minimize");
+    const onMinimize = (e) => {
       e.stopPropagation();
       const st = loadOverlayState();
       st.minimized = true;
       saveOverlayState(st);
       applyOverlayState(root, st);
+    };
+    minimizeBtn?.addEventListener("click", onMinimize);
+    if (minimizeBtn) cleanupFns.push(() => minimizeBtn.removeEventListener("click", onMinimize));
+
+    const refreshBtn = root.querySelector("#fbco-refresh");
+    const onRefresh = (e) => {
+      e.stopPropagation();
+      window.FBCO_requestRefresh && window.FBCO_requestRefresh();
+    };
+    refreshBtn?.addEventListener("click", onRefresh);
+    if (refreshBtn) cleanupFns.push(() => refreshBtn.removeEventListener("click", onRefresh));
+
+    const accordionToggles = Array.from(root.querySelectorAll(".fbco-accordion-toggle"));
+    accordionToggles.forEach((btn) => {
+      const targetId = btn.getAttribute("data-target");
+      if (!targetId) return;
+      const body = root.querySelector(`#${targetId}`);
+      if (!body) return;
+      const setOpen = (open) => {
+        body.hidden = !open;
+        btn.setAttribute("aria-expanded", open ? "true" : "false");
+        const icon = btn.querySelector(".fbco-accordion-icon");
+        if (icon) icon.textContent = open ? "▴" : "▾";
+      };
+      setOpen(btn.getAttribute("aria-expanded") === "true");
+      const onToggle = (e) => {
+        e.stopPropagation();
+        const open = btn.getAttribute("aria-expanded") !== "true";
+        setOpen(open);
+      };
+      btn.addEventListener("click", onToggle);
+      cleanupFns.push(() => btn.removeEventListener("click", onToggle));
     });
 
-    const detailsToggle = root.querySelector("#fbco-details-toggle");
-    const detailsSection = root.querySelector("#fbco-details-section");
-    if (detailsToggle && detailsSection) {
-      detailsToggle.addEventListener("click", (e) => {
-        e.stopPropagation();
-        const collapsed = detailsSection.dataset.collapsed !== "0";
-        detailsSection.dataset.collapsed = collapsed ? "0" : "1";
-        detailsToggle.textContent = collapsed ? "Hide" : "Show";
-      });
-    }
-
     // Restore from icon
-    root.querySelector("#fbco-mini")?.addEventListener("click", (e) => {
+    const miniBtn = root.querySelector("#fbco-mini");
+    const onRestore = (e) => {
       e.stopPropagation();
       const st = loadOverlayState();
       st.minimized = false;
@@ -402,15 +488,18 @@
         error: window.FBCO_STATE.analysisError,
         data: window.FBCO_STATE.lastAnalysis
       });
-    });
+    };
+    miniBtn?.addEventListener("click", onRestore);
+    if (miniBtn) cleanupFns.push(() => miniBtn.removeEventListener("click", onRestore));
 
     // Drag: allow dragging in both modes (use header when open, icon when minimized)
-    installPointerDrag(root);
-
-    // Persist resize only when not minimized
-    installResizePersistence(root);
+    const dragCleanup = installPointerDrag(root);
+    const resizeCleanup = installResizePersistence(root);
+    if (dragCleanup) cleanupFns.push(dragCleanup);
+    if (resizeCleanup) cleanupFns.push(resizeCleanup);
 
     applyOverlayState(root, state);
+    window.FBCO_STATE._cleanupFns = cleanupFns;
 
     return root;
   }
@@ -508,13 +597,30 @@
     // Extra safety
     window.addEventListener("pointerup", endDrag, true);
     window.addEventListener("pointercancel", endDrag, true);
+
+    return () => {
+      if (handle) {
+        handle.removeEventListener("pointerdown", onPointerDown);
+        handle.removeEventListener("pointermove", onPointerMove);
+        handle.removeEventListener("pointerup", endDrag);
+        handle.removeEventListener("pointercancel", endDrag);
+      }
+      if (miniBtn) {
+        miniBtn.removeEventListener("pointerdown", onPointerDown);
+        miniBtn.removeEventListener("pointermove", onPointerMove);
+        miniBtn.removeEventListener("pointerup", endDrag);
+        miniBtn.removeEventListener("pointercancel", endDrag);
+      }
+      window.removeEventListener("pointerup", endDrag, true);
+      window.removeEventListener("pointercancel", endDrag, true);
+    };
   }
 
   function installResizePersistence(root) {
     let lastW = Math.round(root.getBoundingClientRect().width);
     let lastH = Math.round(root.getBoundingClientRect().height);
 
-    setInterval(() => {
+    const intervalId = setInterval(() => {
       if (!document.getElementById(overlayId)) return;
 
       const st = loadOverlayState();
@@ -535,6 +641,8 @@
         applyOverlayState(root, st);
       }
     }, 600);
+
+    return () => clearInterval(intervalId);
   }
 
 
@@ -564,16 +672,40 @@
     return parts.length ? parts.join(" • ") : null;
   }
 
+  function setVisible(el, visible) {
+    if (!el) return;
+    el.style.display = visible ? "" : "none";
+  }
+
+  function isMeaningfulText(value) {
+    if (value == null) return false;
+    const trimmed = String(value).trim();
+    if (!trimmed) return false;
+    return !["(none)", "—", "unknown", "not found", "not available"].includes(trimmed.toLowerCase());
+  }
+
+  function setText(el, value, wrapper) {
+    const text = isMeaningfulText(value) ? String(value).trim() : "";
+    if (el) el.textContent = text || "—";
+    if (wrapper) setVisible(wrapper, Boolean(text));
+    return Boolean(text);
+  }
+
+  function setTextAlways(el, value, wrapper) {
+    const text = isMeaningfulText(value) ? String(value).trim() : "";
+    if (el) el.textContent = text || "—";
+    if (wrapper) setVisible(wrapper, true);
+    return Boolean(text);
+  }
+
   function renderList(el, items, mapFn, opts) {
     if (!el) return;
     el.innerHTML = "";
     if (!items || !items.length) {
-      const li = document.createElement("li");
-      li.className = "fbco-empty";
-      li.textContent = "Not available";
-      el.appendChild(li);
+      setVisible(opts?.wrapper, false);
       return;
     }
+    setVisible(opts?.wrapper, true);
     items.forEach((item) => {
       const text = mapFn ? mapFn(item) : typeof item === "string" ? item : JSON.stringify(item);
       if (!text) return;
@@ -616,12 +748,10 @@
     if (!el) return;
     el.innerHTML = "";
     if (!items || !items.length) {
-      const span = document.createElement("span");
-      span.className = "fbco-tag fbco-tag-empty";
-      span.textContent = "None";
-      el.appendChild(span);
+      setVisible(el, false);
       return;
     }
+    setVisible(el, true);
     items.forEach((item) => {
       if (!item) return;
       const span = document.createElement("span");
@@ -633,12 +763,12 @@
 
   function scoreLabel(score) {
     if (score == null) return null;
-    if (score < 15) return "❌ No";
-    if (score < 35) return "⚠️ Risky";
-    if (score < 55) return "⚖️ Fair";
-    if (score < 72) return "👍 Good";
-    if (score < 88) return "💎 Great";
-    return "🚀 Steal";
+    if (score < 15) return { label: "❌ No", tone: "no" };
+    if (score < 35) return { label: "⚠️ Risky", tone: "risky" };
+    if (score < 55) return { label: "⚖️ Fair", tone: "fair" };
+    if (score < 72) return { label: "👍 Good", tone: "good" };
+    if (score < 88) return { label: "💎 Great", tone: "great" };
+    return { label: "🚀 Steal", tone: "steal" };
   }
 
   window.FBCO_updateOverlay = function (vehicle, analysisState) {
@@ -666,18 +796,22 @@
     const vinEl = document.getElementById("fbco-vin");
     const sellerNotesEl = document.getElementById("fbco-seller-notes");
     const summaryEl = document.getElementById("fbco-summary");
+    const summaryBlock = document.getElementById("fbco-summary-block");
+    const verdictBlock = document.getElementById("fbco-verdict-block");
     const vehicleTitleEl = document.getElementById("fbco-vehicle-title");
+    const metaPriceEl = document.getElementById("fbco-meta-price");
+    const metaMileageEl = document.getElementById("fbco-meta-mileage");
+    const metaTitleEl = document.getElementById("fbco-meta-title-status");
     const issuesEl = document.getElementById("fbco-analysis-issues");
     const wearEl = document.getElementById("fbco-analysis-wear");
-    const upsidesEl = document.getElementById("fbco-analysis-upsides");
     const checklistEl = document.getElementById("fbco-analysis-checklist");
     const questionsEl = document.getElementById("fbco-analysis-questions");
     const priceEl = document.getElementById("fbco-analysis-price");
     const dealBreakersEl = document.getElementById("fbco-analysis-dealbreakers");
     const risksEl = document.getElementById("fbco-analysis-risks");
-    const scoreValEl = document.getElementById("fbco-score-value");
-    const scoreMarkerEl = document.getElementById("fbco-spectrum-marker");
-    const confidenceEl = document.getElementById("fbco-confidence");
+    const scoreBadgeEl = document.getElementById("fbco-score-badge");
+    const confidenceBadgeEl = document.getElementById("fbco-confidence-badge");
+    const confidenceFillEl = document.getElementById("fbco-confidence-fill");
     const tagsEl = document.getElementById("fbco-analysis-tags");
     const marketEl = document.getElementById("fbco-analysis-market");
     const maintenanceEl = document.getElementById("fbco-analysis-maintenance");
@@ -686,95 +820,145 @@
     const lifespanEl = document.getElementById("fbco-lifespan");
     const dailyProjectEl = document.getElementById("fbco-daily-project");
     const skillEl = document.getElementById("fbco-skill");
+    const notesEl = document.getElementById("fbco-notes");
+    const notesBlock = document.getElementById("fbco-notes-block");
+    const repBlock = document.getElementById("fbco-kv-rep");
+    const lifespanBlock = document.getElementById("fbco-kv-lifespan");
+    const dailyBlock = document.getElementById("fbco-kv-daily");
+    const skillBlock = document.getElementById("fbco-kv-skill");
 
-    if (parsedValEl) parsedValEl.textContent = vehicle.normalized || "Not found";
-    if (rawValEl) rawValEl.textContent = vehicle.source_text || "(not found)";
-    if (priceValEl) priceValEl.textContent = window.FBCO_formatUSD(vehicle.price_usd) || "Not found";
-    if (mileageValEl) mileageValEl.textContent = window.FBCO_formatMiles(vehicle.mileage_miles) || "Not found";
-    if (transmissionEl) transmissionEl.textContent = vehicle.transmission || "Not found";
-    if (drivetrainEl) drivetrainEl.textContent = vehicle.drivetrain || "Not found";
-    if (fuelEl) fuelEl.textContent = vehicle.fuel_type || "Not found";
+    const accOverview = document.getElementById("fbco-acc-overview");
+    const accMaintenance = document.getElementById("fbco-acc-maintenance");
+    const accCommon = document.getElementById("fbco-acc-common");
+    const accWear = document.getElementById("fbco-acc-wear");
+    const accRisk = document.getElementById("fbco-acc-risk");
+    const accDeal = document.getElementById("fbco-acc-deal");
+    const accInspection = document.getElementById("fbco-acc-inspection");
+    const accQuestions = document.getElementById("fbco-acc-questions");
+    const accMarket = document.getElementById("fbco-acc-market");
+    const accDetails = document.getElementById("fbco-acc-details");
+
+    if (parsedValEl) parsedValEl.textContent = vehicle.normalized || "—";
+    if (rawValEl) rawValEl.textContent = vehicle.source_text || "—";
+    if (priceValEl) priceValEl.textContent = window.FBCO_formatUSD(vehicle.price_usd) || "—";
+    if (mileageValEl) mileageValEl.textContent = window.FBCO_formatMiles(vehicle.mileage_miles) || "—";
+    if (transmissionEl) transmissionEl.textContent = vehicle.transmission || "—";
+    if (drivetrainEl) drivetrainEl.textContent = vehicle.drivetrain || "—";
+    if (fuelEl) fuelEl.textContent = vehicle.fuel_type || "—";
     if (colorsEl) {
       const colors = [vehicle.exterior_color, vehicle.interior_color].filter(Boolean);
-      colorsEl.textContent = colors.length ? colors.join(" / ") : "Not found";
+      colorsEl.textContent = colors.length ? colors.join(" / ") : "—";
     }
     if (mpgEl) {
       const mpgParts = [];
       if (vehicle.mpg_city != null) mpgParts.push(`${vehicle.mpg_city} city`);
       if (vehicle.mpg_highway != null) mpgParts.push(`${vehicle.mpg_highway} hwy`);
       if (vehicle.mpg_combined != null) mpgParts.push(`${vehicle.mpg_combined} comb`);
-      mpgEl.textContent = mpgParts.length ? mpgParts.join(" · ") : "Not found";
+      mpgEl.textContent = mpgParts.length ? mpgParts.join(" · ") : "—";
     }
-    if (nhtsaEl) nhtsaEl.textContent = vehicle.nhtsa_rating != null ? `${vehicle.nhtsa_rating}/5` : "Not found";
-    if (titleStatusEl) titleStatusEl.textContent = vehicle.title_status || "Not found";
+    if (nhtsaEl) nhtsaEl.textContent = vehicle.nhtsa_rating != null ? `${vehicle.nhtsa_rating}/5` : "—";
+    if (titleStatusEl) titleStatusEl.textContent = vehicle.title_status || "—";
     if (paidOffEl) {
       if (vehicle.paid_off == null) {
-        paidOffEl.textContent = "Not found";
+        paidOffEl.textContent = "—";
       } else {
         paidOffEl.textContent = vehicle.paid_off ? "Yes" : "No";
       }
     }
-    if (vinEl) vinEl.textContent = vehicle.vin || "Not found";
-    if (sellerNotesEl) sellerNotesEl.textContent = vehicle.seller_description || "Not found";
+    if (vinEl) vinEl.textContent = vehicle.vin || "—";
+    if (sellerNotesEl) sellerNotesEl.textContent = vehicle.seller_description || "—";
 
     const loading = analysisState?.loading;
     const error = analysisState?.error;
     const data = analysisState?.data;
+    const loadingText = analysisState?.loadingText;
+    const ready = analysisState?.ready;
 
-    const busy = Boolean(loading && !data);
+    const busy = !ready;
     root.dataset.loading = busy ? "1" : "0";
+    const loadingTextEl = document.getElementById("fbco-loading-text");
+    if (loadingTextEl) loadingTextEl.textContent = loadingText || "Analyzing…";
+    if (busy) {
+      const errorEl = document.getElementById("fbco-error");
+      if (errorEl) setVisible(errorEl, false);
+      return;
+    }
 
-    if (summaryEl) summaryEl.textContent = data?.summary || "(none)";
-    if (finalVerdictEl) finalVerdictEl.textContent = data?.final_verdict || "(none)";
-    if (yearRepEl) yearRepEl.textContent = data?.year_model_reputation || "(none)";
-    if (lifespanEl) lifespanEl.textContent = data?.remaining_lifespan_estimate || "(none)";
-    if (dailyProjectEl) dailyProjectEl.textContent = data?.daily_driver_vs_project || "(none)";
-    if (skillEl) skillEl.textContent = data?.mechanical_skill_required || "(none)";
+    const errorEl = document.getElementById("fbco-error");
+    if (errorEl) {
+      if (error) {
+        errorEl.textContent = `Unable to analyze listing: ${error}. Try refresh.`;
+        setVisible(errorEl, true);
+      } else {
+        setVisible(errorEl, false);
+      }
+    }
+
+    setTextAlways(summaryEl, data?.summary, summaryBlock);
+    setTextAlways(finalVerdictEl, data?.final_verdict, verdictBlock);
+    const repShown = setText(yearRepEl, data?.year_model_reputation, repBlock);
+    const lifespanShown = setText(lifespanEl, data?.remaining_lifespan_estimate, lifespanBlock);
+    const dailyShown = setText(dailyProjectEl, data?.daily_driver_vs_project, dailyBlock);
+    const skillShown = setText(skillEl, data?.mechanical_skill_required, skillBlock);
+    const notesShown = setText(notesEl, data?.notes, notesBlock);
     if (vehicleTitleEl) {
       if (vehicle?.year && vehicle?.make) {
         const name = [vehicle.year, vehicle.make, vehicle.model].filter(Boolean).join(" ");
-        const price = vehicle.price_usd ? window.FBCO_formatUSD(vehicle.price_usd) : null;
-        const miles = vehicle.mileage_miles ? window.FBCO_formatMiles(vehicle.mileage_miles) : null;
-        const extras = [price, miles].filter(Boolean).join(" • ");
-        vehicleTitleEl.textContent = extras ? `${name} (${extras})` : name;
+        vehicleTitleEl.textContent = name;
       } else {
-        vehicleTitleEl.textContent = "—";
+        vehicleTitleEl.textContent = "Vehicle";
       }
     }
 
-    renderList(maintenanceEl, data?.expected_maintenance_near_term, stringifyMaintenance);
-    renderList(issuesEl, data?.common_issues, stringifyIssue);
-    renderList(wearEl, data?.wear_items, stringifyMaintenance);
-    renderList(upsidesEl, data?.upsides);
-    renderList(checklistEl, data?.inspection_checklist);
-    renderList(questionsEl, data?.buyer_questions, null, { clickable: true });
-    renderList(dealBreakersEl, data?.deal_breakers);
-    renderList(risksEl, data?.risk_flags);
-    renderTags(tagsEl, data?.tags);
-    if (marketEl) marketEl.textContent = data?.market_value_estimate || "(estimate)";
-    if (priceEl) priceEl.textContent = data?.price_opinion || "(none)";
+    if (metaPriceEl) metaPriceEl.textContent = window.FBCO_formatUSD(vehicle.price_usd) || "—";
+    if (metaMileageEl) metaMileageEl.textContent = window.FBCO_formatMiles(vehicle.mileage_miles) || "—";
+    if (metaTitleEl) metaTitleEl.textContent = vehicle.title_status || "—";
 
-    if (scoreValEl && scoreMarkerEl) {
-      const score = Number.isFinite(Number(data?.overall_score))
-        ? Number(data?.overall_score)
-        : Number.isFinite(Number(data?.score))
-        ? Number(data?.score)
-        : null;
+    renderList(maintenanceEl, data?.expected_maintenance_near_term, stringifyMaintenance, {
+      wrapper: accMaintenance
+    });
+    renderList(issuesEl, data?.common_issues, stringifyIssue, { wrapper: accCommon });
+    renderList(wearEl, data?.wear_items, stringifyMaintenance, { wrapper: accWear });
+    renderList(checklistEl, data?.inspection_checklist, null, { wrapper: accInspection });
+    renderList(questionsEl, data?.buyer_questions, null, { clickable: true, wrapper: accQuestions });
+    renderList(dealBreakersEl, data?.deal_breakers, null, { wrapper: accDeal });
+    renderList(risksEl, data?.risk_flags, null, { wrapper: accRisk });
+    renderTags(tagsEl, data?.tags);
+
+    const marketText = isMeaningfulText(data?.market_value_estimate) ? data?.market_value_estimate : "";
+    const priceText = isMeaningfulText(data?.price_opinion) ? data?.price_opinion : "";
+    if (marketEl) marketEl.textContent = marketText || "—";
+    if (priceEl) priceEl.textContent = priceText || "—";
+    setVisible(accMarket, Boolean(marketText || priceText));
+
+    const score = Number.isFinite(Number(data?.overall_score))
+      ? Number(data?.overall_score)
+      : Number.isFinite(Number(data?.score))
+      ? Number(data?.score)
+      : null;
+    if (scoreBadgeEl) {
       if (score == null) {
-        scoreValEl.textContent = busy ? "…" : "--";
-        scoreMarkerEl.style.left = "0%";
+        scoreBadgeEl.textContent = busy ? "…" : "--";
+        scoreBadgeEl.className = "fbco-badge fbco-badge-muted";
       } else {
         const clamped = Math.min(100, Math.max(0, score));
-        const label = scoreLabel(clamped);
-        scoreValEl.textContent = label ? `${label} (${clamped}/100)` : `${clamped}/100`;
-        scoreMarkerEl.style.left = `${clamped}%`;
+        const meta = scoreLabel(clamped);
+        scoreBadgeEl.textContent = meta ? `${meta.label} (${clamped})` : `${clamped}/100`;
+        scoreBadgeEl.className = `fbco-badge fbco-badge-${meta?.tone || "muted"}`;
       }
     }
 
-    if (confidenceEl) {
-      const conf =
-        Number.isFinite(Number(data?.confidence)) ? Math.round(Number(data?.confidence) * 100) : null;
-      confidenceEl.textContent = conf == null ? "Confidence: --" : `Confidence: ${conf}%`;
+    const conf =
+      Number.isFinite(Number(data?.confidence)) ? Math.round(Number(data?.confidence) * 100) : null;
+    if (confidenceBadgeEl) {
+      confidenceBadgeEl.textContent = conf == null ? "Confidence --" : `Confidence ${conf}%`;
     }
+    if (confidenceFillEl) {
+      confidenceFillEl.style.width = conf == null ? "0%" : `${conf}%`;
+    }
+
+    const overviewVisible = repShown || lifespanShown || dailyShown || skillShown || notesShown;
+    setVisible(accOverview, overviewVisible);
+    setVisible(accDetails, true);
   };
 })();

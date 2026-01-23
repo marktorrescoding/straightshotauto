@@ -8,6 +8,7 @@
 
   function buildSnapshotKey(vehicle) {
     if (!vehicle) return null;
+    if (!vehicle.year || !vehicle.make) return null;
     return JSON.stringify({
       url: vehicle.url,
       year: vehicle.year,
@@ -32,20 +33,34 @@
     });
   }
 
-  async function requestAnalysis(vehicle) {
+  function isCompleteAnalysis(data) {
+    if (!data) return false;
+    const hasSummary = typeof data.summary === "string" && data.summary.trim() && data.summary !== "unknown";
+    const hasVerdict =
+      typeof data.final_verdict === "string" && data.final_verdict.trim() && data.final_verdict !== "unknown";
+    const hasConfidence = Number.isFinite(Number(data.confidence));
+    return hasSummary && hasVerdict && hasConfidence;
+  }
+
+  async function requestAnalysis(vehicle, opts = {}) {
     const state = window.FBCO_STATE;
     if (!vehicle) return;
 
     const key = buildSnapshotKey(vehicle);
     if (!key) return;
 
-    if (state.lastSnapshotKey === key && (state.analysisLoading || state.lastAnalysis || state.analysisError)) {
+    if (
+      !opts.force &&
+      state.lastSnapshotKey === key &&
+      (state.analysisLoading || state.lastAnalysis || state.analysisError)
+    ) {
       return;
     }
 
     const isNewSnapshot = state.lastSnapshotKey && state.lastSnapshotKey !== key;
     state.lastSnapshotKey = key;
     state.analysisLoading = true;
+    state.loadingPhase = "Analyzing model…";
     if (isNewSnapshot) {
       state.analysisReady = false;
       state.lastAnalysis = null;
@@ -58,17 +73,34 @@
       loading: true,
       ready: state.analysisReady,
       error: null,
-      data: state.lastAnalysis
+      data: state.lastAnalysis,
+      loadingText: state.loadingPhase
     });
 
+    const phaseTimer = setTimeout(() => {
+      if (window.FBCO_STATE.analysisLoading) {
+        window.FBCO_STATE.loadingPhase = "Building checklist…";
+        window.FBCO_updateOverlay(vehicle, {
+          loading: true,
+          ready: window.FBCO_STATE.analysisReady,
+          error: window.FBCO_STATE.analysisError,
+          data: window.FBCO_STATE.lastAnalysis,
+          loadingText: window.FBCO_STATE.loadingPhase
+        });
+      }
+    }, 3500);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 20000);
     try {
       const res = await fetch(API_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        url: vehicle.url,
-        source_text: vehicle.source_text,
-        year: vehicle.year,
+        signal: controller.signal,
+        body: JSON.stringify({
+          url: vehicle.url,
+          source_text: vehicle.source_text,
+          year: vehicle.year,
         make: vehicle.make,
         model: vehicle.model,
         price_usd: vehicle.price_usd,
@@ -88,8 +120,8 @@
         seller_description: vehicle.seller_description,
         about_items: vehicle.about_items,
         is_vehicle: vehicle.is_vehicle
-      })
-    });
+        })
+      });
 
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
@@ -97,18 +129,42 @@
       if (seq !== state.analysisSeq) return;
       state.lastAnalysis = data;
       state.analysisReady = true;
+
+      if (!isCompleteAnalysis(data)) {
+        const retryKey = key;
+        if (state.analysisRetryKey !== retryKey) {
+          state.analysisRetryKey = retryKey;
+          state.analysisRetryCount = 0;
+        }
+        state.analysisRetryCount = (state.analysisRetryCount || 0) + 1;
+        if (state.analysisRetryCount <= 2) {
+          state.analysisLoading = false;
+          state.loadingPhase = "Retrying analysis…";
+          setTimeout(() => {
+            requestAnalysis(vehicle, { force: true });
+          }, 1200);
+        }
+      }
     } catch (err) {
       if (seq !== state.analysisSeq) return;
-      state.analysisError = err?.message || "Request failed";
+      if (err?.name === "AbortError") {
+        state.analysisError = "Request timed out";
+      } else {
+        state.analysisError = err?.message || "Request failed";
+      }
       state.analysisReady = true;
     } finally {
       if (seq !== state.analysisSeq) return;
       state.analysisLoading = false;
+      state.loadingPhase = "";
+      clearTimeout(timeoutId);
+      clearTimeout(phaseTimer);
       window.FBCO_updateOverlay(vehicle, {
         loading: !state.analysisReady,
         ready: state.analysisReady,
         error: state.analysisError,
-        data: state.lastAnalysis
+        data: state.lastAnalysis,
+        loadingText: state.loadingPhase
       });
     }
   }
@@ -128,6 +184,7 @@
     // Avoid updating while user is selecting text inside overlay
     if (state.isUserSelecting) return;
 
+    window.FBCO_STATE.loadingPhase = "Parsing listing…";
     let vehicle = window.FBCO_extractVehicleSnapshot();
 
     if (state.lastVehicle) {
@@ -142,6 +199,18 @@
       state.lastVehicle = vehicle;
     }
 
+    const snapshotKey = vehicle ? buildSnapshotKey(vehicle) : null;
+    if (snapshotKey && snapshotKey !== state.lastSnapshotKey) {
+      state.analysisReady = false;
+      state.analysisError = null;
+      state.lastAnalysis = null;
+      state.analysisRetryKey = snapshotKey;
+      state.analysisRetryCount = 0;
+      state.analysisLoading = true;
+      state.loadingPhase = "Analyzing model…";
+      state.lastRenderKey = null;
+    }
+
     const renderKey = JSON.stringify({
       vehicle,
       ready: state.analysisReady,
@@ -154,7 +223,8 @@
         loading: !state.analysisReady,
         ready: state.analysisReady,
         error: state.analysisError,
-        data: state.lastAnalysis
+        data: state.lastAnalysis,
+        loadingText: state.loadingPhase
       });
     }
 
@@ -213,6 +283,20 @@
   }
 
   window.FBCO_insertMessage = insertMessage;
+  window.FBCO_requestRefresh = function () {
+    const state = window.FBCO_STATE;
+    if (!state) return;
+    state.analysisSeq += 1;
+    state.lastSnapshotKey = null;
+    state.analysisLoading = false;
+    state.analysisError = null;
+    state.lastAnalysis = null;
+    state.analysisReady = false;
+    state.lastRenderKey = null;
+    state.lastVehicle = null;
+    state.loadingPhase = "Parsing listing…";
+    runUpdate();
+  };
 
   const scheduleUpdate = window.FBCO_debounce(runUpdate, UPDATE_DEBOUNCE_MS);
 
@@ -230,9 +314,8 @@
     if (location.href !== lastUrl) {
       lastUrl = location.href;
 
-      // New listing / navigation: allow overlay again
-      if (window.FBCO_STATE) window.FBCO_STATE.dismissed = false;
       if (window.FBCO_STATE) {
+        window.FBCO_STATE.dismissed = false;
         window.FBCO_STATE.analysisLoading = false;
         window.FBCO_STATE.analysisError = null;
         window.FBCO_STATE.lastAnalysis = null;
