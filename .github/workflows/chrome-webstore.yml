@@ -17,7 +17,7 @@ jobs:
           git archive --format=zip --output=extension.zip HEAD
 
       - name: Upload to Chrome Web Store
-        uses: mnao305/chrome-extension-upload@v4
+        uses: mnao305/chrome-extension-upload@v3
         with:
           extension-id: ${{ secrets.CHROME_EXTENSION_ID }}
           client-id: ${{ secrets.CHROME_CLIENT_ID }}
