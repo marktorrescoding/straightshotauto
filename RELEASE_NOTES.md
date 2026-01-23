@@ -1,5 +1,8 @@
 # Release Notes
 
+## 0.4.2 — 2026-01-23
+- Renamed extension title to StraightShot Auto.
+
 ## 0.4.1 — 2026-01-23
 - Bumped extension version for latest overlay and analysis updates.
 
