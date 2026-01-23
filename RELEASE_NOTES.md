@@ -1,5 +1,8 @@
 # Release Notes
 
+## 0.4.3 — 2026-01-23
+- Version bump to trigger automated Chrome Web Store publish.
+
 ## 0.4.2 — 2026-01-23
 - Renamed extension title to StraightShot Auto.
 
