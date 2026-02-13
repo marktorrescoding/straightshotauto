@@ -172,17 +172,14 @@
     return res.json();
   }
 
-  async function startCheckout(session) {
-    const res = await fetch(BILLING_CHECKOUT_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${session.access_token}`,
-        "Content-Type": "application/json"
-      }
-    });
-    if (!res.ok) throw new Error("Unable to start checkout");
-    const data = await res.json();
-    if (data?.url) window.open(data.url, "_blank", "noopener,noreferrer");
+  function startCheckout(popup, email) {
+    const url = new URL(BILLING_CHECKOUT_URL);
+    if (email) url.searchParams.set("email", email);
+    if (popup && !popup.closed) {
+      popup.location = url.toString();
+    } else {
+      window.open(url.toString(), "_blank", "noopener,noreferrer");
+    }
   }
 
   async function requestAnalysis(vehicle, opts = {}) {
@@ -536,15 +533,14 @@
   window.FBCO_startCheckout = async function () {
     const state = window.FBCO_STATE;
     state.authMessage = "";
+    const popup = window.open("", "_blank", "noopener,noreferrer");
     try {
-      const session = await getValidSession();
-      if (!session?.access_token) {
-        state.authMessage = "Sign in to start checkout.";
-        scheduleUpdate();
-        return;
-      }
-      await startCheckout(session);
+      const emailInput = document.getElementById("fbco-auth-email")?.value?.trim() || "";
+      const email = /\S+@\S+\.\S+/.test(emailInput) ? emailInput : "";
+      await getValidSession();
+      startCheckout(popup, email);
     } catch (err) {
+      if (popup && !popup.closed) popup.close();
       state.authMessage = err?.message || "Unable to start checkout.";
     }
     scheduleUpdate();

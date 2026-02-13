@@ -153,6 +153,49 @@ async function supabaseAdminRequest(path, env, options = {}) {
   return res.json();
 }
 
+async function fetchSupabaseUserByEmail(email, env) {
+  if (!email) return null;
+  if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) return null;
+  const res = await fetch(
+    `${env.SUPABASE_URL}/auth/v1/admin/users?email=${encodeURIComponent(email)}`,
+    {
+      headers: {
+        apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`
+      }
+    }
+  );
+  if (!res.ok) return null;
+  const data = await res.json();
+  if (Array.isArray(data?.users)) return data.users[0] || null;
+  if (Array.isArray(data)) return data[0] || null;
+  return data?.user || null;
+}
+
+async function createSupabaseUserForEmail(email, env) {
+  if (!email) return null;
+  if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) return null;
+  const res = await fetch(`${env.SUPABASE_URL}/auth/v1/admin/users`, {
+    method: "POST",
+    headers: {
+      apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ email, email_confirm: true })
+  });
+  if (!res.ok) return null;
+  return res.json();
+}
+
+async function findOrCreateSupabaseUserByEmail(email, env) {
+  let user = await fetchSupabaseUserByEmail(email, env);
+  if (user?.id) return user;
+  user = await createSupabaseUserForEmail(email, env);
+  if (user?.id) return user;
+  return null;
+}
+
 async function getSubscriptionRecord(userId, env) {
   if (!userId) return null;
   const path = `/rest/v1/subscriptions?user_id=eq.${userId}&select=user_id,status,plan,updated_at,stripe_customer_id&order=updated_at.desc&limit=1`;
@@ -166,7 +209,9 @@ function isSubscriptionActive(record) {
 }
 
 async function stripeRequest(env, path, body) {
-  if (!env.STRIPE_SECRET_KEY) return null;
+  if (!env.STRIPE_SECRET_KEY) {
+    return { ok: false, status: 500, error: "Missing STRIPE_SECRET_KEY" };
+  }
   const res = await fetch(`https://api.stripe.com/v1/${path}`, {
     method: "POST",
     headers: {
@@ -175,8 +220,21 @@ async function stripeRequest(env, path, body) {
     },
     body
   });
-  if (!res.ok) return null;
-  return res.json();
+  let data = null;
+  try {
+    data = await res.json();
+  } catch {
+    data = null;
+  }
+  if (!res.ok) {
+    return {
+      ok: false,
+      status: res.status,
+      error: data?.error?.message || "Stripe request failed",
+      raw: data
+    };
+  }
+  return { ok: true, status: res.status, data };
 }
 
 function hexFromBuffer(buf) {
@@ -1156,7 +1214,12 @@ export default {
 
       const eventType = event?.type || "";
       const dataObject = event?.data?.object || {};
-      const userId = dataObject?.client_reference_id || dataObject?.metadata?.user_id || null;
+      let userId = dataObject?.client_reference_id || dataObject?.metadata?.user_id || null;
+      if (!userId) {
+        const email = dataObject?.customer_details?.email || dataObject?.customer_email || null;
+        const user = await findOrCreateSupabaseUserByEmail(email, env);
+        userId = user?.id || null;
+      }
 
       if (userId) {
         const status = dataObject?.status || dataObject?.subscription_status || "unknown";
@@ -1200,26 +1263,56 @@ export default {
     }
 
     if (url.pathname === "/billing/checkout") {
-      if (request.method !== "POST") {
+      const token = getAuthToken(request);
+      const user = token ? await fetchSupabaseUser(token, env) : null;
+
+      let email = "";
+      if (request.method === "GET") {
+        email = (url.searchParams.get("email") || "").toString().trim();
+      } else if (request.method === "POST") {
+        let payload = null;
+        try {
+          payload = await request.json();
+        } catch {
+          payload = null;
+        }
+        email = (payload?.email || "").toString().trim();
+      } else {
         return jsonResponse({ error: "Method not allowed" }, origin, 405);
       }
-      const token = getAuthToken(request);
-      const user = await fetchSupabaseUser(token, env);
-      if (!user) return jsonResponse({ error: "Unauthorized" }, origin, 401);
+
       if (!env.STRIPE_PRICE_ID || !env.STRIPE_SUCCESS_URL || !env.STRIPE_CANCEL_URL) {
         return jsonResponse({ error: "Billing not configured" }, origin, 500);
       }
+
+      let resolvedUserId = user?.id || null;
+      if (!resolvedUserId && email) {
+        const emailUser = await findOrCreateSupabaseUserByEmail(email, env);
+        resolvedUserId = emailUser?.id || null;
+      }
+
       const body = new URLSearchParams({
         mode: "subscription",
         "line_items[0][price]": env.STRIPE_PRICE_ID,
         "line_items[0][quantity]": "1",
         success_url: env.STRIPE_SUCCESS_URL,
         cancel_url: env.STRIPE_CANCEL_URL,
-        client_reference_id: user.id,
-        customer_email: user.email || ""
+        ...(resolvedUserId ? { client_reference_id: resolvedUserId } : {}),
+        ...(user?.email || email ? { customer_email: user?.email || email } : {})
       });
-      const session = await stripeRequest(env, "checkout/sessions", body);
+      const sessionRes = await stripeRequest(env, "checkout/sessions", body);
+      if (!sessionRes?.ok) {
+        return jsonResponse(
+          { error: sessionRes?.error || "Unable to create checkout", stripe_status: sessionRes?.status },
+          origin,
+          502
+        );
+      }
+      const session = sessionRes.data;
       if (!session?.url) return jsonResponse({ error: "Unable to create checkout" }, origin, 502);
+      if (request.method === "GET") {
+        return Response.redirect(session.url, 303);
+      }
       return jsonResponse({ url: session.url }, origin, 200);
     }
 
@@ -1239,7 +1332,15 @@ export default {
         customer: customerId,
         return_url: env.STRIPE_SUCCESS_URL
       });
-      const session = await stripeRequest(env, "billing_portal/sessions", body);
+      const sessionRes = await stripeRequest(env, "billing_portal/sessions", body);
+      if (!sessionRes?.ok) {
+        return jsonResponse(
+          { error: sessionRes?.error || "Unable to create portal session", stripe_status: sessionRes?.status },
+          origin,
+          502
+        );
+      }
+      const session = sessionRes.data;
       if (!session?.url) return jsonResponse({ error: "Unable to create portal session" }, origin, 502);
       return jsonResponse({ url: session.url }, origin, 200);
     }

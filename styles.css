@@ -644,7 +644,7 @@
   display: flex;
 }
 
-#fb-car-overlay-mvp[data-loading="1"] .fbco-card,
+#fb-car-overlay-mvp[data-loading="1"] .fbco-card:not(.fbco-card-access),
 #fb-car-overlay-mvp[data-loading="1"] .fbco-tags,
 #fb-car-overlay-mvp[data-loading="1"] .fbco-accordion,
 #fb-car-overlay-mvp[data-loading="1"] .fbco-divider,
