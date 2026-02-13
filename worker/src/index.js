@@ -1366,6 +1366,8 @@ export default {
       year: payload?.year || null,
       make: payload?.make || null,
       model: payload?.model || null,
+      trim: payload?.trim || null,
+      trim_conflict: payload?.trim_conflict ?? null,
       drivetrain: payload?.drivetrain || null,
       transmission: payload?.transmission || null,
       engine: payload?.engine || null,
@@ -1373,8 +1375,11 @@ export default {
       owners: payload?.owners ?? null,
       price_usd: payload?.price_usd ?? null,
       mileage_miles: payload?.mileage_miles ?? null,
+      vin: payload?.vin || null,
       seller_description: payload?.seller_description || null,
-      about_items: payload?.about_items || []
+      about_items: payload?.about_items || [],
+      provenance: payload?.provenance || null,
+      negotiation_points: payload?.negotiation_points || []
     };
 
     const authToken = getAuthToken(request);
@@ -1440,6 +1445,7 @@ export default {
       "- Do NOT label generic wear items (brakes, tires, suspension wear) as common issues. Put them under wear_items.",
       "- If no platform-known issues are highly confident, common_issues should be an empty array.",
       "- Do NOT mention CVT-related issues unless this exact year/model is known to use a CVT.",
+      "- If trim_conflict is true, note the minor trim inconsistency and reduce confidence slightly.",
       "",
       "Costs:",
       "- estimated_cost_diy and estimated_cost_shop must be realistic ranges like \"$150–$300\" (not single numbers).",

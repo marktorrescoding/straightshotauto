@@ -300,11 +300,23 @@
 
   function parseTitleStatus(text) {
     if (!text) return null;
+
     if (/salvage|salvamento/i.test(text)) return "salvage";
-    if (/rebuilt|rebuild/i.test(text)) return "rebuilt";
-    if (/clean\s+title/i.test(text)) return "clean";
-    if (/lien/i.test(text)) return "lien";
+    if (/rebuilt|rebuild|reconstruido/i.test(text)) return "rebuilt";
+    if (/lien|gravamen/i.test(text)) return "lien";
+
+    if (/\bclean\s+title\b/i.test(text)) return "clean_seller_claimed";
+    if (/\bt[ií]tulo\s+limpio\b/i.test(text) || /\btitulo\s+limpio\b/i.test(text)) {
+      return "clean_seller_claimed";
+    }
+
     return null;
+  }
+
+  function parseTrim(text) {
+    if (!text) return null;
+    const m = text.match(/\b(SR5|Limited|TRD|Platinum|Sport)\b/i);
+    return m ? m[1].toUpperCase() : null;
   }
 
   function parseAboutVehicleText(text) {
@@ -372,6 +384,17 @@
     }
 
     return out;
+  }
+
+  function buildNegotiationPoints(v) {
+    const pts = [];
+    if (!v.title_status) pts.push("Title status not stated — ask if clean/salvage/rebuilt.");
+    if (!v.drivetrain) pts.push("Drivetrain not stated — confirm 2WD vs 4WD.");
+    if (v.mileage_miles && v.mileage_miles >= 150000) {
+      pts.push("High mileage — request maintenance records + pre-purchase inspection.");
+    }
+    if (!v.vin) pts.push("VIN not listed — ask for VIN to run history check.");
+    return pts.slice(0, 6);
   }
 
   function normalizeSellerDescription(text) {
@@ -468,11 +491,16 @@
       findSectionTextByHeading(/^Description$/i);
     const seller_description = normalizeSellerDescription(sellerText);
 
-    const vin = parseVin(sellerText);
-    const title_status = parseTitleStatus(sellerText);
+    const vin = parseVin(sellerText) || parseVin(aboutText) || null;
+    const titleFromSeller = parseTitleStatus(sellerText);
+    const titleFromAbout = parseTitleStatus(aboutText);
+    const titleFromRaw = parseTitleStatus(raw);
+    const title_status = titleFromSeller || titleFromAbout || titleFromRaw || null;
 
-    const descDrivetrain = about.drivetrain || parseDrivetrain(sellerText);
-    const descTransmission = about.transmission || parseTransmission(sellerText);
+    const sellerDrivetrain = parseDrivetrain(sellerText);
+    const sellerTransmission = parseTransmission(sellerText);
+    const descDrivetrain = about.drivetrain || sellerDrivetrain;
+    const descTransmission = about.transmission || sellerTransmission;
     const descFuel = about.fuel_type || parseFuelType(sellerText);
     const descColors = parseColors(sellerText);
     const descMpg = parseMpg(sellerText);
@@ -483,12 +511,42 @@
     const signalVehicle = hasVehicleSignals();
     const vehicleStatus = categoryIsVehicle === null ? (signalVehicle ? true : null) : categoryIsVehicle;
 
+    const trimFromTitle = parseTrim(raw);
+    const trimFromSeller = parseTrim(sellerText);
+    const trimFromAbout = parseTrim(aboutText);
+    const trim = trimFromTitle || trimFromSeller || trimFromAbout;
+    const trim_conflict =
+      (trimFromTitle && trimFromSeller && trimFromTitle !== trimFromSeller) ||
+      (trimFromTitle && trimFromAbout && trimFromTitle !== trimFromAbout) ||
+      (trimFromSeller && trimFromAbout && trimFromSeller !== trimFromAbout) ||
+      false;
+    const provenance = {
+      title_status_source: titleFromSeller
+        ? "seller_description"
+        : titleFromAbout
+          ? "about_vehicle"
+          : titleFromRaw
+            ? "title"
+            : null,
+      drivetrain_source: about.drivetrain ? "about_vehicle" : sellerDrivetrain ? "seller_description" : null,
+      transmission_source: about.transmission ? "about_vehicle" : sellerTransmission ? "seller_description" : null
+    };
+
+    const negotiation_points = buildNegotiationPoints({
+      title_status,
+      drivetrain: descDrivetrain,
+      mileage_miles: mileage.mileage_miles,
+      vin
+    });
+
     return {
       url: location.href,
       source_text: raw || null,
       year: parsed?.year || null,
       make: parsed?.make || null,
       model: parsed?.model || null,
+      trim: trim || null,
+      trim_conflict,
       normalized: parsed?.normalized || null,
       price_text: price_text || null,
       price_usd: price_usd != null ? price_usd : null,
@@ -508,7 +566,9 @@
       title_status: title_status || null,
       vin: vin || null,
       seller_description: seller_description || null,
-      about_items: about.about_items || []
+      about_items: about.about_items || [],
+      provenance,
+      negotiation_points
     };
   };
 })();

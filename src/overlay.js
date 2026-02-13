@@ -67,6 +67,13 @@
     return Math.min(Math.max(n, min), max);
   }
 
+  function formatTitleStatus(value) {
+    if (!value) return "—";
+    const v = String(value);
+    if (v === "clean_seller_claimed") return "Clean (seller-claimed)";
+    return v.charAt(0).toUpperCase() + v.slice(1);
+  }
+
   function removeOverlay() {
     const el = document.getElementById(overlayId);
     if (window.FBCO_STATE._cleanupFns) {
@@ -935,7 +942,7 @@
       mpgEl.textContent = mpgParts.length ? mpgParts.join(" · ") : "—";
     }
     if (nhtsaEl) nhtsaEl.textContent = vehicle.nhtsa_rating != null ? `${vehicle.nhtsa_rating}/5` : "—";
-    if (titleStatusEl) titleStatusEl.textContent = vehicle.title_status || "—";
+    if (titleStatusEl) titleStatusEl.textContent = formatTitleStatus(vehicle.title_status);
     if (paidOffEl) {
       if (vehicle.paid_off == null) {
         paidOffEl.textContent = "—";
@@ -1028,7 +1035,7 @@
     if (metaMileageEl) metaMileageEl.textContent = window.FBCO_formatMiles(vehicle.mileage_miles) || "—";
     if (metaTitleEl) {
       if (vehicle.title_status) {
-        metaTitleEl.textContent = vehicle.title_status;
+        metaTitleEl.textContent = formatTitleStatus(vehicle.title_status);
         metaTitleEl.classList.remove("fbco-muted");
       } else {
         metaTitleEl.textContent = "Unknown status";

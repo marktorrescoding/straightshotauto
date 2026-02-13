@@ -22,6 +22,7 @@
       year: vehicle.year,
       make: vehicle.make,
       model: vehicle.model,
+      trim: vehicle.trim,
       price_usd: vehicle.price_usd,
       mileage_miles: vehicle.mileage_miles,
       source_text: vehicle.source_text,
@@ -252,11 +253,13 @@
         },
         signal: controller.signal,
         body: JSON.stringify({
-          url: vehicle.url,
-          source_text: vehicle.source_text,
-          year: vehicle.year,
+        url: vehicle.url,
+        source_text: vehicle.source_text,
+        year: vehicle.year,
         make: vehicle.make,
         model: vehicle.model,
+        trim: vehicle.trim,
+        trim_conflict: vehicle.trim_conflict,
         price_usd: vehicle.price_usd,
         mileage_miles: vehicle.mileage_miles,
         transmission: vehicle.transmission,
@@ -273,6 +276,8 @@
         vin: vehicle.vin,
         seller_description: vehicle.seller_description,
         about_items: vehicle.about_items,
+        provenance: vehicle.provenance,
+        negotiation_points: vehicle.negotiation_points,
         is_vehicle: vehicle.is_vehicle
         })
       });
