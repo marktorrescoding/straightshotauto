@@ -231,14 +231,13 @@
 
   function parseDrivetrain(text) {
     if (!text) return null;
-    const m = text.match(/\b(4x4|4wd|awd|fwd|rwd|2wd)\b/i);
+    const t = String(text).toLowerCase();
+    if (/\b(2|two)\s*[-\s]?\s*wheel\s*[-\s]?\s*drive\b/.test(t)) return "2WD";
+    if (/\b(4|four)\s*[-\s]?\s*wheel\s*[-\s]?\s*drive\b/.test(t)) return "4WD";
+
+    const m = t.match(/\b(4x4|4wd|awd|fwd|rwd|2wd)\b/);
     if (!m) return null;
     const v = m[1].toUpperCase();
-    if (v === "4WD") return "4WD";
-    if (v === "AWD") return "AWD";
-    if (v === "FWD") return "FWD";
-    if (v === "RWD") return "RWD";
-    if (v === "2WD") return "2WD";
     if (v === "4X4") return "4x4";
     return v;
   }
@@ -313,10 +312,27 @@
     return null;
   }
 
+  function inferTitleStatusNotMentioned(sellerText, aboutText, rawTitle) {
+    const combined = [sellerText, aboutText, rawTitle].filter(Boolean).join("\n");
+    if (!combined) return null;
+    if (/\b(title|t[ií]tulo|salvage|salvamento|rebuilt|reconstruido|lien|gravamen)\b/i.test(combined)) {
+      return null;
+    }
+    return "unknown_not_mentioned";
+  }
+
   function parseTrim(text) {
     if (!text) return null;
     const m = text.match(/\b(SR5|Limited|TRD|Platinum|Sport)\b/i);
     return m ? m[1].toUpperCase() : null;
+  }
+
+  function inferVehicleTypeHint(text) {
+    const t = (text || "").toLowerCase();
+    if (/\b(truck|pickup|tundra|f-150|silverado|ram)\b/.test(t)) return "truck";
+    if (/\b(suv|fj|4runner|tahoe|suburban|wrangler)\b/.test(t)) return "suv";
+    if (/\b(crossover|rav4|cr-v|escape|rogue)\b/.test(t)) return "crossover";
+    return null;
   }
 
   function parseAboutVehicleText(text) {
@@ -495,7 +511,10 @@
     const titleFromSeller = parseTitleStatus(sellerText);
     const titleFromAbout = parseTitleStatus(aboutText);
     const titleFromRaw = parseTitleStatus(raw);
-    const title_status = titleFromSeller || titleFromAbout || titleFromRaw || null;
+    let title_status = titleFromSeller || titleFromAbout || titleFromRaw || null;
+    if (!title_status) {
+      title_status = inferTitleStatusNotMentioned(sellerText, aboutText, raw);
+    }
 
     const sellerDrivetrain = parseDrivetrain(sellerText);
     const sellerTransmission = parseTransmission(sellerText);
@@ -538,6 +557,7 @@
       mileage_miles: mileage.mileage_miles,
       vin
     });
+    const vehicle_type_hint = inferVehicleTypeHint(raw || "") || null;
 
     return {
       url: location.href,
@@ -568,7 +588,8 @@
       seller_description: seller_description || null,
       about_items: about.about_items || [],
       provenance,
-      negotiation_points
+      negotiation_points,
+      vehicle_type_hint
     };
   };
 })();

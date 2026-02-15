@@ -1,4 +1,7 @@
 (() => {
+  if (window.top !== window.self) return;
+  if (window.FBCO_CONTENT_LOADED) return;
+  window.FBCO_CONTENT_LOADED = true;
   const UPDATE_DEBOUNCE_MS = 900;
   const API_URL = "https://car-bot.car-bot.workers.dev/analyze";
   const AUTH_STATUS_URL = "https://car-bot.car-bot.workers.dev/auth/status";
@@ -17,12 +20,17 @@
   function buildSnapshotKey(vehicle) {
     if (!vehicle) return null;
     if (!vehicle.year || !vehicle.make) return null;
+    if (window.FBCO_makeSnapshotKey) {
+      const key = window.FBCO_makeSnapshotKey(vehicle);
+      if (key) return key;
+    }
     return JSON.stringify({
       url: vehicle.url,
       year: vehicle.year,
       make: vehicle.make,
       model: vehicle.model,
       trim: vehicle.trim,
+      vehicle_type_hint: vehicle.vehicle_type_hint,
       price_usd: vehicle.price_usd,
       mileage_miles: vehicle.mileage_miles,
       source_text: vehicle.source_text,
@@ -190,12 +198,21 @@
     const key = buildSnapshotKey(vehicle);
     if (!key) return;
 
+    if (!opts.force && window.FBCO_ANALYZE_INFLIGHT && window.FBCO_ANALYZE_KEY === key) return;
+    if (state.analysisLoading && !opts.retry) return;
+    if (!opts.force && state.analysisRequestedKey === key) return;
+
+    const now = Date.now();
+    const minIntervalMs = 10000;
+    if (state.nextAnalyzeAt && now < state.nextAnalyzeAt) return;
+    if (!opts.force && state.lastAnalyzeAt && now - state.lastAnalyzeAt < minIntervalMs) return;
+
     const session = await getValidSession();
     state.authSession = session;
     const authStatus = session ? await fetchAuthStatus(session) : { authenticated: false };
     state.authValidated = Boolean(authStatus?.validated);
 
-    state.analysisRetrying = false;
+    if (!opts.retry) state.analysisRetrying = false;
 
     if (
       !opts.force &&
@@ -207,12 +224,12 @@
 
     const isNewSnapshot = state.lastSnapshotKey && state.lastSnapshotKey !== key;
     state.lastSnapshotKey = key;
+    state.analysisRequestedKey = key;
+    state.analysisRequestedAt = Date.now();
     state.analysisLoading = true;
-    state.loadingPhase = "Analyzing model…";
-    if (isNewSnapshot) {
-      state.analysisReady = false;
-      state.lastAnalysis = null;
-    }
+    window.FBCO_ANALYZE_INFLIGHT = true;
+    window.FBCO_ANALYZE_KEY = key;
+    state.loadingPhase = isNewSnapshot ? "Refreshing analysis…" : "Analyzing model…";
     state.analysisError = null;
     state.analysisSeq += 1;
     const seq = state.analysisSeq;
@@ -243,7 +260,7 @@
     }, 3500);
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 20000);
+    const timeoutId = setTimeout(() => controller.abort(), 35000);
     try {
       const res = await fetch(API_URL, {
         method: "POST",
@@ -259,6 +276,7 @@
         make: vehicle.make,
         model: vehicle.model,
         trim: vehicle.trim,
+        vehicle_type_hint: vehicle.vehicle_type_hint,
         trim_conflict: vehicle.trim_conflict,
         price_usd: vehicle.price_usd,
         mileage_miles: vehicle.mileage_miles,
@@ -282,6 +300,21 @@
         })
       });
 
+      if (res.status === 429) {
+        let retryAfterSeconds = 10;
+        try {
+          const body = await res.json();
+          retryAfterSeconds = Number(body?.retry_after_seconds) || retryAfterSeconds;
+        } catch {
+          retryAfterSeconds = Number(res.headers.get("Retry-After")) || retryAfterSeconds;
+        }
+        state.analysisError = "Rate limited";
+        state.analysisErrorAt = Date.now();
+        state.analysisReady = true;
+        state.analysisRetrying = false;
+        state.nextAnalyzeAt = Date.now() + Math.max(8, retryAfterSeconds) * 1000;
+        return;
+      }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       const validatedHeader = res.headers.get("X-User-Validated");
@@ -305,26 +338,13 @@
       const updatedFree = loadFreeCount();
       state.freeCount = updatedFree;
       state.analysisGated = !state.authValidated && updatedFree >= FREE_LIMIT;
+      state.lastAnalyzeAt = Date.now();
 
       if (!complete) {
-        const retryKey = key;
-        if (state.analysisRetryKey !== retryKey) {
-          state.analysisRetryKey = retryKey;
-          state.analysisRetryCount = 0;
-        }
-        state.analysisRetryCount = (state.analysisRetryCount || 0) + 1;
-        if (state.analysisRetryCount <= 4) {
-          state.analysisRetrying = true;
-          state.loadingPhase = "Retrying analysis…";
-          setTimeout(() => {
-            requestAnalysis(vehicle, { force: true });
-          }, 1200);
-        } else {
-          state.analysisRetrying = false;
-          state.analysisError = "Incomplete response";
-          state.analysisErrorAt = Date.now();
-          state.analysisReady = true;
-        }
+        state.analysisRetrying = false;
+        state.analysisError = "Incomplete response";
+        state.analysisErrorAt = Date.now();
+        state.analysisReady = true;
       }
     } catch (err) {
       if (seq !== state.analysisSeq) return;
@@ -343,6 +363,8 @@
       }
       clearTimeout(timeoutId);
       clearTimeout(phaseTimer);
+      window.FBCO_ANALYZE_INFLIGHT = false;
+      if (window.FBCO_ANALYZE_KEY === key) window.FBCO_ANALYZE_KEY = null;
       window.FBCO_updateOverlay(vehicle, {
         loading: !state.analysisReady,
         ready: state.analysisReady,
@@ -387,16 +409,11 @@
 
     const snapshotKey = vehicle ? buildSnapshotKey(vehicle) : null;
     if (snapshotKey && snapshotKey !== state.lastSnapshotKey) {
-      state.analysisReady = false;
       state.analysisError = null;
-      state.lastAnalysis = null;
       state.analysisRetryKey = snapshotKey;
       state.analysisRetryCount = 0;
       state.analysisRetrying = false;
       state.analysisErrorAt = null;
-      state.analysisLoading = true;
-      state.loadingPhase = "Analyzing model…";
-      state.lastRenderKey = null;
     }
 
     const renderKey = JSON.stringify({
@@ -424,17 +441,6 @@
     }
 
     if (vehicle?.year && vehicle?.make) {
-      if (state.analysisError && !state.lastAnalysis && !state.analysisLoading) {
-        const lastErrAt = state.analysisErrorAt || 0;
-        if (Date.now() - lastErrAt > 4000) {
-          state.analysisError = null;
-          state.analysisReady = false;
-          state.analysisLoading = true;
-          state.loadingPhase = "Retrying analysis…";
-          requestAnalysis(vehicle, { force: true });
-          return;
-        }
-      }
       if (state.forceAnalysisNext) {
         state.forceAnalysisNext = false;
         requestAnalysis(vehicle, { force: true });
@@ -557,6 +563,7 @@
     if (!state) return;
     state.analysisSeq += 1;
     state.lastSnapshotKey = null;
+    state.analysisRequestedKey = null;
     state.analysisLoading = false;
     state.analysisError = null;
     state.lastAnalysis = null;
@@ -589,8 +596,8 @@
         window.FBCO_STATE.dismissed = false;
         window.FBCO_STATE.analysisLoading = false;
         window.FBCO_STATE.analysisError = null;
-        window.FBCO_STATE.lastAnalysis = null;
         window.FBCO_STATE.lastSnapshotKey = null;
+        window.FBCO_STATE.analysisRequestedKey = null;
         window.FBCO_STATE.analysisSeq += 1;
         window.FBCO_STATE.analysisReady = false;
         window.FBCO_STATE.lastVehicle = null;

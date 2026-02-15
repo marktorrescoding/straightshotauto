@@ -81,6 +81,10 @@
   font-weight: 600;
 }
 
+#fb-car-overlay-mvp[data-loading="1"] .fbco-title-sub {
+  display: block;
+}
+
 #fb-car-overlay-mvp .fbco-actions {
   display: flex;
   gap: 4px;
@@ -641,7 +645,7 @@
 }
 
 #fb-car-overlay-mvp[data-loading="1"] .fbco-loading {
-  display: flex;
+  display: none;
 }
 
 #fb-car-overlay-mvp[data-loading="1"] .fbco-card:not(.fbco-card-access),
@@ -650,7 +654,8 @@
 #fb-car-overlay-mvp[data-loading="1"] .fbco-divider,
 #fb-car-overlay-mvp[data-loading="1"] .fbco-row,
 #fb-car-overlay-mvp[data-loading="1"] .fbco-block {
-  display: none;
+  opacity: 0.6;
+  pointer-events: none;
 }
 
 #fb-car-overlay-mvp .fbco-loading {

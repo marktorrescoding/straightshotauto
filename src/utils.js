@@ -91,6 +91,27 @@
     return false;
   };
 
+  function normalizeListingId(url) {
+    if (!url) return "";
+    try {
+      const u = new URL(url);
+      const m = u.pathname.match(/\/marketplace\/item\/(\d+)/);
+      return m ? m[1] : u.pathname || "";
+    } catch {
+      return String(url);
+    }
+  }
+
+  window.FBCO_makeSnapshotKey = function (v) {
+    try {
+      return [normalizeListingId(v?.url), v?.year, v?.make, v?.model]
+        .map((x) => String(x ?? ""))
+        .join("|");
+    } catch {
+      return null;
+    }
+  };
+
   window.FBCO_storage = {
     get(key, fallback) {
       try {
