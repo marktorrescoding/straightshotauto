@@ -24,29 +24,25 @@
       const key = window.FBCO_makeSnapshotKey(vehicle);
       if (key) return key;
     }
+    const normalizeListingId = (url) => {
+      if (!url) return "";
+      try {
+        const u = new URL(url);
+        const m = u.pathname.match(/\/marketplace\/item\/(\d+)/);
+        return m ? m[1] : u.pathname || "";
+      } catch {
+        return String(url);
+      }
+    };
+    const norm = (v) => (typeof v === "string" ? v.trim().replace(/\s+/g, " ") : v ?? "");
     return JSON.stringify({
-      url: vehicle.url,
+      listing_id: normalizeListingId(vehicle.url),
+      url: norm(vehicle.url),
+      vin: norm(vehicle.vin),
       year: vehicle.year,
-      make: vehicle.make,
-      model: vehicle.model,
-      trim: vehicle.trim,
-      vehicle_type_hint: vehicle.vehicle_type_hint,
-      price_usd: vehicle.price_usd,
-      mileage_miles: vehicle.mileage_miles,
-      source_text: vehicle.source_text,
-      transmission: vehicle.transmission,
-      drivetrain: vehicle.drivetrain,
-      fuel_type: vehicle.fuel_type,
-      exterior_color: vehicle.exterior_color,
-      interior_color: vehicle.interior_color,
-      mpg_city: vehicle.mpg_city,
-      mpg_highway: vehicle.mpg_highway,
-      mpg_combined: vehicle.mpg_combined,
-      nhtsa_rating: vehicle.nhtsa_rating,
-      paid_off: vehicle.paid_off,
-      title_status: vehicle.title_status,
-      vin: vehicle.vin,
-      seller_description: vehicle.seller_description
+      make: norm(vehicle.make),
+      model: norm(vehicle.model),
+      trim: norm(vehicle.trim)
     });
   }
 

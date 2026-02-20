@@ -24,6 +24,23 @@ const RATE_WINDOW_MS = 60 * 60 * 1000;
 const RATE_MAX_REQUESTS = 120;
 
 const rateState = new Map();
+const inFlight = new Map();
+
+async function dedupe(key, fn) {
+  const existing = inFlight.get(key);
+  if (existing) return existing;
+
+  const p = (async () => {
+    try {
+      return await fn();
+    } finally {
+      inFlight.delete(key);
+    }
+  })();
+
+  inFlight.set(key, p);
+  return p;
+}
 
 function corsHeaders(origin) {
   const allowOrigin = origin || "*";
@@ -79,6 +96,47 @@ async function hashString(input) {
   const hashBuffer = await crypto.subtle.digest("SHA-256", data);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
   return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function normalizeKeyString(value) {
+  if (typeof value !== "string") return value ?? null;
+  const trimmed = value.trim().replace(/\s+/g, " ");
+  return trimmed || null;
+}
+
+function normalizeKeyArray(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map((v) => normalizeKeyString(v)).filter(Boolean).sort();
+}
+
+function normalizeListingId(url) {
+  if (!url) return "";
+  try {
+    const u = new URL(url);
+    const m = u.pathname.match(/\/marketplace\/item\/(\d+)/);
+    return m ? m[1] : u.pathname || "";
+  } catch {
+    return String(url);
+  }
+}
+
+function canonicalSnapshot(snapshot) {
+  const listingId = normalizeListingId(snapshot?.url);
+  return {
+    listing_id: listingId || null,
+    vin: normalizeKeyString(snapshot?.vin),
+    year: snapshot?.year ?? null,
+    make: normalizeKeyString(snapshot?.make),
+    model: normalizeKeyString(snapshot?.model),
+    trim: normalizeKeyString(snapshot?.trim),
+    drivetrain: normalizeKeyString(snapshot?.drivetrain),
+    transmission: normalizeKeyString(snapshot?.transmission),
+    engine: normalizeKeyString(snapshot?.engine),
+    price_usd: snapshot?.price_usd ?? null,
+    mileage_miles: snapshot?.mileage_miles ?? null,
+    seller_description: normalizeKeyString(snapshot?.seller_description),
+    about_items: normalizeKeyArray(snapshot?.about_items)
+  };
 }
 
 function clamp(n, min, max) {
@@ -1386,10 +1444,14 @@ export default {
         return jsonResponse({ error: "Missing required fields", required: ["year", "make"] }, origin, 400);
       }
 
+      const requestId =
+        (typeof crypto?.randomUUID === "function" && crypto.randomUUID()) ||
+        `req_${Date.now()}_${Math.random().toString(16).slice(2, 10)}`;
+
       const lifespanAnchors = buildLifespanAnchorsForPrompt(snapshot);
 
-      const cacheSeed = snapshot.url || snapshot.vin || JSON.stringify(snapshot);
-      const snapshotKey = await hashString(String(cacheSeed));
+      const canon = canonicalSnapshot(snapshot);
+      const snapshotKey = await hashString(JSON.stringify(canon));
       const cacheKey = new Request(`https://cache.car-bot.local/analyze/${CACHE_VERSION}/${snapshotKey}`);
       const cache = caches.default;
 
@@ -1398,133 +1460,155 @@ export default {
         const withCors = new Response(cached.body, cached);
         withCors.headers.set("Access-Control-Allow-Origin", origin || "*");
         withCors.headers.set("X-Cache", "HIT");
+        withCors.headers.set("X-Dedupe", "CACHE_HIT");
+        withCors.headers.set("X-Request-Id", requestId);
+        withCors.headers.set("X-Snapshot-Key", snapshotKey.slice(0, 12));
         return withCors;
       }
 
-      const ip = getClientIp(request);
-      const rate = checkRateLimit(ip);
-      if (!rate.ok) {
-        const retryAfter = Math.max(1, Math.ceil((rate.retryAfterMs || 0) / 1000));
-        return new Response(JSON.stringify({ error: "Rate limited", retry_after_seconds: retryAfter }), {
-          status: 429,
-          headers: {
-            "Content-Type": "application/json",
-            "Retry-After": String(retryAfter),
-            ...corsHeaders(origin)
-          }
-        });
-      }
+      return await dedupe(snapshotKey, async () => {
+        const cached2 = await cache.match(cacheKey);
+        if (cached2) {
+          const withCors = new Response(cached2.body, cached2);
+          withCors.headers.set("Access-Control-Allow-Origin", origin || "*");
+          withCors.headers.set("X-Cache", "HIT");
+          withCors.headers.set("X-Dedupe", "LOCK_HIT");
+          withCors.headers.set("X-Request-Id", requestId);
+          withCors.headers.set("X-Snapshot-Key", snapshotKey.slice(0, 12));
+          return withCors;
+        }
 
-      if (!env.OPENAI_API_KEY) {
-        return jsonResponse({ error: "Server missing OPENAI_API_KEY" }, origin, 500);
-      }
-
-      const facts = {
-        year: snapshot.year,
-        make: snapshot.make,
-        model: snapshot.model,
-        trim: snapshot.trim,
-        price_usd: snapshot.price_usd,
-        mileage_miles: snapshot.mileage_miles,
-        drivetrain: snapshot.drivetrain,
-        transmission: snapshot.transmission,
-        title_status: snapshot.title_status,
-        seller_claims: snapshot.seller_description
-      };
-
-      // Prompt: keep focused on this listing and structured outputs
-      const userPrompt = [
-        "Evaluate this used car listing snapshot for a buyer.",
-        "Be specific. Do not contradict the canonical facts.",
-        "",
-        "Canonical facts (do not contradict):",
-        JSON.stringify(facts, null, 2),
-        "",
-        "Field requirements (follow exactly):",
-        "- summary: 2–4 sentences using listing facts.",
-        "- year_model_reputation: 1–3 sentences; if uncertain about platform specifics, say so.",
-        "- expected_maintenance_near_term: 3–6 items with cost ranges.",
-        "- common_issues: [] unless highly confident for this exact year/generation/powertrain.",
-        "- wear_items: 2–4 items; if seller claims new wear items, say 'verify receipt/date'.",
-        "- remaining_lifespan_estimate: exactly 3 lines (Best/Average/Worst), each with (assumption).",
-        "- risk_flags: 3–6; each includes subsystem + consequence + ($range or $unknown).",
-        "- buyer_questions: 4–7; each has (why it matters); at least 2 component-specific.",
-        "- deal_breakers: 3–6 concrete inspection/test-drive findings.",
-        "- tags: 3–6 short tags.",
-        "",
-        "Confidence rubric:",
-        "- 0.85–1.00 only if powertrain + title + records are clear.",
-        "- 0.65–0.84 if powertrain known but history unclear.",
-        "- 0.45–0.64 if powertrain or title is unknown.",
-        "- <=0.44 if >=250k miles or active symptoms.",
-        "",
-        "Snapshot JSON:",
-        JSON.stringify(snapshot, null, 2),
-        "",
-        "Lifespan anchors (calibration reference):",
-        JSON.stringify(lifespanAnchors, null, 2)
-      ].join("\n");
-
-      // Use JSON schema to improve structure reliability
-      const openaiRes = await fetch("https://api.openai.com/v1/responses", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${env.OPENAI_API_KEY}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          model: "gpt-4o-mini",
-          temperature: 0.15,
-          max_output_tokens: 1600,
-          text: {
-            format: {
-              type: "json_schema",
-              name: RESPONSE_SCHEMA.name,
-              schema: RESPONSE_SCHEMA.schema
+        const ip = getClientIp(request);
+        const rate = checkRateLimit(ip);
+        if (!rate.ok) {
+          const retryAfter = Math.max(1, Math.ceil((rate.retryAfterMs || 0) / 1000));
+          return new Response(JSON.stringify({ error: "Rate limited", retry_after_seconds: retryAfter }), {
+            status: 429,
+            headers: {
+              "Content-Type": "application/json",
+              "Retry-After": String(retryAfter),
+              ...corsHeaders(origin),
+              "X-Request-Id": requestId,
+              "X-Snapshot-Key": snapshotKey.slice(0, 12),
+              "X-Dedupe": "LOCK_MISS"
             }
+          });
+        }
+
+        if (!env.OPENAI_API_KEY) {
+          return jsonResponse({ error: "Server missing OPENAI_API_KEY" }, origin, 500);
+        }
+
+        const facts = {
+          year: snapshot.year,
+          make: snapshot.make,
+          model: snapshot.model,
+          trim: snapshot.trim,
+          price_usd: snapshot.price_usd,
+          mileage_miles: snapshot.mileage_miles,
+          drivetrain: snapshot.drivetrain,
+          transmission: snapshot.transmission,
+          title_status: snapshot.title_status,
+          seller_claims: snapshot.seller_description
+        };
+
+        // Prompt: keep focused on this listing and structured outputs
+        const userPrompt = [
+          "Evaluate this used car listing snapshot for a buyer.",
+          "Be specific. Do not contradict the canonical facts.",
+          "",
+          "Canonical facts (do not contradict):",
+          JSON.stringify(facts, null, 2),
+          "",
+          "Field requirements (follow exactly):",
+          "- summary: 2–4 sentences using listing facts.",
+          "- year_model_reputation: 1–3 sentences; if uncertain about platform specifics, say so.",
+          "- expected_maintenance_near_term: 3–6 items with cost ranges.",
+          "- common_issues: [] unless highly confident for this exact year/generation/powertrain.",
+          "- wear_items: 2–4 items; if seller claims new wear items, say 'verify receipt/date'.",
+          "- remaining_lifespan_estimate: exactly 3 lines (Best/Average/Worst), each with (assumption).",
+          "- risk_flags: 3–6; each includes subsystem + consequence + ($range or $unknown).",
+          "- buyer_questions: 4–7; each has (why it matters); at least 2 component-specific.",
+          "- deal_breakers: 3–6 concrete inspection/test-drive findings.",
+          "- tags: 3–6 short tags.",
+          "",
+          "Confidence rubric:",
+          "- 0.85–1.00 only if powertrain + title + records are clear.",
+          "- 0.65–0.84 if powertrain known but history unclear.",
+          "- 0.45–0.64 if powertrain or title is unknown.",
+          "- <=0.44 if >=250k miles or active symptoms.",
+          "",
+          "Snapshot JSON:",
+          JSON.stringify(snapshot, null, 2),
+          "",
+          "Lifespan anchors (calibration reference):",
+          JSON.stringify(lifespanAnchors, null, 2)
+        ].join("\n");
+
+        // Use JSON schema to improve structure reliability
+        const openaiRes = await fetch("https://api.openai.com/v1/responses", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${env.OPENAI_API_KEY}`,
+            "Content-Type": "application/json"
           },
-          input: [
-            { role: "system", content: [{ type: "input_text", text: SYSTEM_PROMPT }] },
-            { role: "user", content: [{ type: "input_text", text: userPrompt }] }
-          ]
-        })
+          body: JSON.stringify({
+            model: "gpt-4o-mini",
+            temperature: 0.15,
+            max_output_tokens: 1600,
+            text: {
+              format: {
+                type: "json_schema",
+                name: RESPONSE_SCHEMA.name,
+                schema: RESPONSE_SCHEMA.schema
+              }
+            },
+            input: [
+              { role: "system", content: [{ type: "input_text", text: SYSTEM_PROMPT }] },
+              { role: "user", content: [{ type: "input_text", text: userPrompt }] }
+            ]
+          })
+        });
+
+        const rawText = await openaiRes.text();
+        if (!openaiRes.ok) {
+          return jsonResponse({ error: "OpenAI error", status: openaiRes.status, details: rawText }, origin, 502);
+        }
+
+        let data = null;
+        try {
+          data = JSON.parse(rawText);
+        } catch {
+          return jsonResponse({ error: "OpenAI response not JSON", details: rawText.slice(0, 2000) }, origin, 502);
+        }
+
+        // Responses API: prefer output_text; else fallback to first text content
+        const content = data?.output?.[0]?.content || [];
+        const text =
+          data?.output_text ||
+          content.find((c) => c?.type === "output_text")?.text ||
+          content[0]?.text ||
+          "";
+
+        let parsed = null;
+        try {
+          parsed = JSON.parse(String(text));
+        } catch {
+          return jsonResponse({ error: "Failed to parse model response", raw: String(text).slice(0, 4000) }, origin, 502);
+        }
+
+        const final = coerceAndFill(parsed, snapshot);
+        const res = jsonResponse(final, origin, 200);
+        res.headers.set("X-Cache", "MISS");
+        res.headers.set("X-Dedupe", "LOCK_MISS");
+        res.headers.set("X-Request-Id", requestId);
+        res.headers.set("X-Snapshot-Key", snapshotKey.slice(0, 12));
+        res.headers.set("X-User-Validated", authValidated ? "true" : "false");
+        if (authUser?.id) res.headers.set("X-User-Id", authUser.id);
+
+        ctx?.waitUntil?.(cache.put(cacheKey, res.clone()));
+        return res;
       });
-
-      const rawText = await openaiRes.text();
-      if (!openaiRes.ok) {
-        return jsonResponse({ error: "OpenAI error", status: openaiRes.status, details: rawText }, origin, 502);
-      }
-
-      let data = null;
-      try {
-        data = JSON.parse(rawText);
-      } catch {
-        return jsonResponse({ error: "OpenAI response not JSON", details: rawText.slice(0, 2000) }, origin, 502);
-      }
-
-      // Responses API: prefer output_text; else fallback to first text content
-      const content = data?.output?.[0]?.content || [];
-      const text =
-        data?.output_text ||
-        content.find((c) => c?.type === "output_text")?.text ||
-        content[0]?.text ||
-        "";
-
-      let parsed = null;
-      try {
-        parsed = JSON.parse(String(text));
-      } catch {
-        return jsonResponse({ error: "Failed to parse model response", raw: String(text).slice(0, 4000) }, origin, 502);
-      }
-
-      const final = coerceAndFill(parsed, snapshot);
-      const res = jsonResponse(final, origin, 200);
-      res.headers.set("X-Cache", "MISS");
-      res.headers.set("X-User-Validated", authValidated ? "true" : "false");
-      if (authUser?.id) res.headers.set("X-User-Id", authUser.id);
-
-      ctx?.waitUntil?.(cache.put(cacheKey, res.clone()));
-      return res;
     } catch (err) {
       return jsonResponse(
         {
