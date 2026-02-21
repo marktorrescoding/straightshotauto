@@ -6,12 +6,19 @@
   const API_URL = "https://car-bot.car-bot.workers.dev/analyze";
   const AUTH_STATUS_URL = "https://car-bot.car-bot.workers.dev/auth/status";
   const BILLING_CHECKOUT_URL = "https://car-bot.car-bot.workers.dev/billing/checkout";
-  const SUPABASE_URL = "https://YOUR_SUPABASE_PROJECT.supabase.co";
-  const SUPABASE_ANON_KEY = "YOUR_SUPABASE_ANON_KEY";
-  const FREE_LIMIT = 5;
+  const AUTH_CALLBACK_URL = "https://car-bot.car-bot.workers.dev/auth/callback";
+  const AUTH_SIGNUP_URL = "https://car-bot.car-bot.workers.dev/auth/signup";
+  const SUPABASE_URL = "https://uluvqqypgdpsxzutojdd.supabase.co";
+  const SUPABASE_ANON_KEY =
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVsdXZxcXlwZ2Rwc3h6dXRvamRkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAwNzY1MDgsImV4cCI6MjA4NTY1MjUwOH0.m49_Y868P0Vpw5vT3SuDDEXbsSN3VT80CMhPWP1HCH8";
+  const FREE_LIMIT = 1;
   const AUTH_STORAGE_KEY = "fbco.auth.session.v1";
+  const AUTH_EMAIL_KEY = "fbco.auth.email.v1";
   const FREE_COUNT_KEY = "fbco.free.count.v1";
   const FREE_KEY_KEY = "fbco.free.snapshot.v1";
+  const FREE_DAY_KEY = "fbco.free.day.v1";
+  const CHECKOUT_PENDING_KEY = "fbco.checkout.pending.v1";
+  const AUTH_MODE = "password";
 
   function isItemPage() {
     return /\/marketplace\/item\//.test(location.pathname);
@@ -63,7 +70,9 @@
       freeCount,
       freeRemaining: Math.max(0, FREE_LIMIT - freeCount),
       email: state?.authSession?.user?.email || "",
-      message: state?.authMessage || ""
+      message: state?.authMessage || "",
+      authMode: AUTH_MODE,
+      lastEmail: window.FBCO_storage.get(AUTH_EMAIL_KEY, "")
     };
   }
 
@@ -79,11 +88,24 @@
     window.FBCO_storage.set(AUTH_STORAGE_KEY, null);
   }
 
+  function currentDayStamp() {
+    return new Date().toISOString().slice(0, 10);
+  }
+
   function loadFreeCount() {
+    const today = currentDayStamp();
+    const storedDay = window.FBCO_storage.get(FREE_DAY_KEY, null);
+    if (storedDay !== today) {
+      window.FBCO_storage.set(FREE_DAY_KEY, today);
+      window.FBCO_storage.set(FREE_COUNT_KEY, 0);
+      window.FBCO_storage.set(FREE_KEY_KEY, null);
+      return 0;
+    }
     return Number(window.FBCO_storage.get(FREE_COUNT_KEY, 0)) || 0;
   }
 
   function saveFreeCount(count) {
+    window.FBCO_storage.set(FREE_DAY_KEY, currentDayStamp());
     window.FBCO_storage.set(FREE_COUNT_KEY, count);
   }
 
@@ -93,6 +115,33 @@
 
   function saveLastFreeKey(key) {
     window.FBCO_storage.set(FREE_KEY_KEY, key);
+  }
+
+  function markCheckoutPending(ms = 2 * 60 * 1000) {
+    const until = Date.now() + ms;
+    window.FBCO_storage.set(CHECKOUT_PENDING_KEY, until);
+    return until;
+  }
+
+  function getCheckoutPendingUntil() {
+    const until = Number(window.FBCO_storage.get(CHECKOUT_PENDING_KEY, 0)) || 0;
+    return until > Date.now() ? until : 0;
+  }
+
+  function clearCheckoutPending() {
+    window.FBCO_storage.set(CHECKOUT_PENDING_KEY, 0);
+  }
+
+  function onAuthSessionChanged() {
+    updateAccessState();
+    scheduleUpdate();
+  }
+
+  if (chrome?.storage?.onChanged) {
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+      if (areaName !== "local") return;
+      if (changes[AUTH_STORAGE_KEY]) onAuthSessionChanged();
+    });
   }
 
   async function refreshSession(session) {
@@ -129,15 +178,20 @@
     if (!SUPABASE_URL || SUPABASE_URL.includes("YOUR_SUPABASE") || !SUPABASE_ANON_KEY || SUPABASE_ANON_KEY.includes("YOUR_SUPABASE")) {
       throw new Error("Auth not configured");
     }
+    if (email) window.FBCO_storage.set(AUTH_EMAIL_KEY, email);
     const res = await fetch(`${SUPABASE_URL}/auth/v1/otp`, {
       method: "POST",
       headers: {
         apikey: SUPABASE_ANON_KEY,
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({ email, create_user: true })
+      body: JSON.stringify({
+        email,
+        create_user: true,
+        email_redirect_to: AUTH_CALLBACK_URL
+      })
     });
-    if (!res.ok) throw new Error("Unable to send login code");
+    if (!res.ok) throw new Error("Unable to send magic link");
   }
 
   async function verifyLoginCode(email, code) {
@@ -153,6 +207,32 @@
       body: JSON.stringify({ type: "email", email, token: code })
     });
     if (!res.ok) throw new Error("Invalid code");
+    const data = await res.json();
+    const session = {
+      access_token: data.access_token,
+      refresh_token: data.refresh_token,
+      expires_at: data.expires_at,
+      user: data.user
+    };
+    saveAuthSession(session);
+    return session;
+  }
+
+  async function loginWithPassword(email, password) {
+    if (!SUPABASE_URL || SUPABASE_URL.includes("YOUR_SUPABASE") || !SUPABASE_ANON_KEY || SUPABASE_ANON_KEY.includes("YOUR_SUPABASE")) {
+      throw new Error("Auth not configured");
+    }
+    if (!email || !password) throw new Error("Email and password required");
+    window.FBCO_storage.set(AUTH_EMAIL_KEY, email);
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+      method: "POST",
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ email, password })
+    });
+    if (!res.ok) throw new Error("Invalid email or password");
     const data = await res.json();
     const session = {
       access_token: data.access_token,
@@ -209,6 +289,25 @@
     state.authValidated = Boolean(authStatus?.validated);
 
     if (!opts.retry) state.analysisRetrying = false;
+
+    state.freeCount = loadFreeCount();
+    state.analysisGated = !state.authValidated && state.freeCount >= FREE_LIMIT;
+    if (state.analysisGated) {
+      state.analysisLoading = false;
+      state.analysisReady = true;
+      state.analysisError = "Free limit reached. Log in or subscribe to continue.";
+      state.analysisErrorAt = Date.now();
+      window.FBCO_updateOverlay(vehicle, {
+        loading: false,
+        ready: true,
+        error: state.analysisError,
+        data: state.lastAnalysis,
+        loadingText: "",
+        access: buildAccessInfo(state),
+        gated: state.analysisGated
+      });
+      return;
+    }
 
     if (
       !opts.force &&
@@ -412,11 +511,14 @@
       state.analysisErrorAt = null;
     }
 
+    const access = buildAccessInfo(state);
     const renderKey = JSON.stringify({
       vehicle,
       ready: state.analysisReady,
       error: state.analysisError,
-      data: state.lastAnalysis
+      data: state.lastAnalysis,
+      access,
+      gated: state.analysisGated
     });
     if (renderKey !== state.lastRenderKey) {
       state.lastRenderKey = renderKey;
@@ -426,7 +528,7 @@
         error: state.analysisError,
         data: state.lastAnalysis,
         loadingText: state.loadingPhase,
-        access: buildAccessInfo(state),
+        access,
         gated: state.analysisGated
       });
     }
@@ -496,32 +598,20 @@
     state.authSession = session;
     const authStatus = session ? await fetchAuthStatus(session) : { authenticated: false };
     state.authValidated = Boolean(authStatus?.validated);
+    if (state.authValidated) clearCheckoutPending();
     state.freeCount = loadFreeCount();
     state.analysisGated = !state.authValidated && state.freeCount >= FREE_LIMIT;
   }
 
-  window.FBCO_authSendCode = async function (email) {
+  window.FBCO_authLogin = async function (email, password) {
     const state = window.FBCO_STATE;
-    state.authMessage = "";
+    state.authMessage = "Signing in...";
     try {
-      await sendLoginCode(email);
-      state.authMessage = "Check your email for the login code.";
-    } catch (err) {
-      state.authMessage = err?.message || "Unable to send code.";
-    }
-    updateAccessState();
-    scheduleUpdate();
-  };
-
-  window.FBCO_authVerifyCode = async function (email, code) {
-    const state = window.FBCO_STATE;
-    state.authMessage = "";
-    try {
-      const session = await verifyLoginCode(email, code);
+      const session = await loginWithPassword(email, password);
       state.authSession = session;
       state.authMessage = "Signed in.";
     } catch (err) {
-      state.authMessage = err?.message || "Unable to verify code.";
+      state.authMessage = err?.message || "Unable to sign in.";
     }
     await updateAccessState();
     scheduleUpdate();
@@ -537,10 +627,21 @@
     scheduleUpdate();
   };
 
+  window.FBCO_openSignup = function () {
+    window.open(AUTH_SIGNUP_URL, "_blank", "noopener,noreferrer");
+  };
+
+  window.FBCO_saveAuthEmail = function (email) {
+    const clean = (email || "").toString().trim();
+    if (!clean) return;
+    window.FBCO_storage.set(AUTH_EMAIL_KEY, clean);
+  };
+
   window.FBCO_startCheckout = async function () {
     const state = window.FBCO_STATE;
     state.authMessage = "";
     const popup = window.open("", "_blank", "noopener,noreferrer");
+    state.checkoutPollUntil = markCheckoutPending();
     try {
       const emailInput = document.getElementById("fbco-auth-email")?.value?.trim() || "";
       const email = /\S+@\S+\.\S+/.test(emailInput) ? emailInput : "";
@@ -550,8 +651,33 @@
       if (popup && !popup.closed) popup.close();
       state.authMessage = err?.message || "Unable to start checkout.";
     }
+    scheduleCheckoutPoll();
     scheduleUpdate();
   };
+
+  function scheduleCheckoutPoll() {
+    const state = window.FBCO_STATE;
+    if (!state || state.checkoutPollTimer) return;
+    state.checkoutPollTimer = setInterval(async () => {
+      const pendingUntil = state.checkoutPollUntil || getCheckoutPendingUntil();
+      if (!pendingUntil || Date.now() > pendingUntil) {
+        clearInterval(state.checkoutPollTimer);
+        state.checkoutPollTimer = null;
+        state.checkoutPollUntil = 0;
+        clearCheckoutPending();
+        return;
+      }
+      if (state.authValidated) {
+        clearInterval(state.checkoutPollTimer);
+        state.checkoutPollTimer = null;
+        state.checkoutPollUntil = 0;
+        clearCheckoutPending();
+        return;
+      }
+      await updateAccessState();
+      scheduleUpdate();
+    }, 4000);
+  }
 
   window.FBCO_insertMessage = insertMessage;
   window.FBCO_requestRefresh = function () {
@@ -580,6 +706,10 @@
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) scheduleUpdate();
   });
+
+  if (getCheckoutPendingUntil()) {
+    scheduleCheckoutPoll();
+  }
 
   // FB is SPA: URL changes
   let lastUrl = location.href;

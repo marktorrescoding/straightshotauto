@@ -63,6 +63,17 @@ function jsonResponse(body, origin, status = 200) {
   });
 }
 
+function htmlResponse(html, origin, status = 200) {
+  return new Response(html, {
+    status,
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store",
+      ...corsHeaders(origin)
+    }
+  });
+}
+
 function getClientIp(request) {
   return (
     request.headers.get("CF-Connecting-IP") ||
@@ -272,6 +283,34 @@ async function stripeRequest(env, path, body) {
       "Content-Type": "application/x-www-form-urlencoded"
     },
     body
+  });
+  let data = null;
+  try {
+    data = await res.json();
+  } catch {
+    data = null;
+  }
+  if (!res.ok) {
+    return {
+      ok: false,
+      status: res.status,
+      error: data?.error?.message || "Stripe request failed",
+      raw: data
+    };
+  }
+  return { ok: true, status: res.status, data };
+}
+
+async function stripeGetRequest(env, path) {
+  if (!env.STRIPE_SECRET_KEY) {
+    return { ok: false, status: 500, error: "Missing STRIPE_SECRET_KEY" };
+  }
+  const res = await fetch(`https://api.stripe.com/v1/${path}`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${env.STRIPE_SECRET_KEY}`,
+      "Content-Type": "application/x-www-form-urlencoded"
+    }
   });
   let data = null;
   try {
@@ -1274,7 +1313,18 @@ export default {
         }
 
         if (userId) {
-          const status = dataObject?.status || dataObject?.subscription_status || "unknown";
+          let status = "unknown";
+          if (eventType.startsWith("customer.subscription.")) {
+            status = dataObject?.status || "unknown";
+          } else if (eventType === "checkout.session.completed") {
+            status = dataObject?.subscription_status || dataObject?.status || "unknown";
+            if (dataObject?.subscription && env.STRIPE_SECRET_KEY) {
+              const subRes = await stripeGetRequest(env, `subscriptions/${dataObject.subscription}`);
+              if (subRes?.ok && subRes?.data?.status) status = subRes.data.status;
+            }
+          } else {
+            status = dataObject?.subscription_status || dataObject?.status || "unknown";
+          }
           const stripeCustomerId = dataObject?.customer || dataObject?.customer_id || null;
           await supabaseAdminRequest("/rest/v1/subscriptions", env, {
             method: "POST",
@@ -1290,6 +1340,129 @@ export default {
         }
 
         return jsonResponse({ received: true, type: eventType }, origin, 200);
+      }
+
+      if (url.pathname === "/") {
+        const html =
+          "<!doctype html>" +
+          "<html><head><meta charset=\"utf-8\"><title>StraightShotAuto</title></head>" +
+          "<body style=\"font-family:system-ui, -apple-system, sans-serif; padding:24px;\">" +
+          "<h2>StraightShotAuto</h2>" +
+          "<p>Sign-in received. You can close this tab and return to Facebook Marketplace.</p>" +
+          "</body></html>";
+        return new Response(html, {
+          status: 200,
+          headers: {
+            "Content-Type": "text/html; charset=utf-8",
+            ...corsHeaders(origin)
+          }
+        });
+      }
+
+      if (url.pathname === "/auth/callback") {
+        const html =
+          "<!doctype html>" +
+          "<html><head><meta charset=\"utf-8\"><title>StraightShotAuto</title></head>" +
+          "<body style=\"font-family:system-ui, -apple-system, sans-serif; padding:24px;\">" +
+          "<h2>StraightShotAuto</h2>" +
+          "<p>Sign-in received. You can close this tab and return to Facebook Marketplace.</p>" +
+          "</body></html>";
+        return htmlResponse(html, origin, 200);
+      }
+
+      if (url.pathname === "/success") {
+        const html =
+          "<!doctype html>" +
+          "<html><head><meta charset=\"utf-8\"><title>StraightShotAuto</title></head>" +
+          "<body style=\"font-family:system-ui, -apple-system, sans-serif; padding:24px; background:#f7f6f2;\">" +
+          "<div style=\"max-width:640px; margin:10vh auto; background:#fff; border:1px solid #e6e2d8; padding:24px; border-radius:12px;\">" +
+          "<h2 style=\"margin:0 0 8px; font-size:22px;\">Payment successful</h2>" +
+          "<p style=\"margin:0; font-size:15px; line-height:1.5;\">Your subscription is active. You can close this tab and return to Facebook Marketplace.</p>" +
+          "<p style=\"margin-top:12px; color:#6b6b6b;\">StraightShotAuto</p>" +
+          "</div></body></html>";
+        return htmlResponse(html, origin, 200);
+      }
+
+      if (url.pathname === "/cancel") {
+        const html =
+          "<!doctype html>" +
+          "<html><head><meta charset=\"utf-8\"><title>StraightShotAuto</title></head>" +
+          "<body style=\"font-family:system-ui, -apple-system, sans-serif; padding:24px; background:#f7f6f2;\">" +
+          "<div style=\"max-width:640px; margin:10vh auto; background:#fff; border:1px solid #e6e2d8; padding:24px; border-radius:12px;\">" +
+          "<h2 style=\"margin:0 0 8px; font-size:22px;\">Payment canceled</h2>" +
+          "<p style=\"margin:0; font-size:15px; line-height:1.5;\">No charges were made. You can close this tab and return to Facebook Marketplace.</p>" +
+          "<p style=\"margin-top:12px; color:#6b6b6b;\">StraightShotAuto</p>" +
+          "</div></body></html>";
+        return htmlResponse(html, origin, 200);
+      }
+
+      if (url.pathname === "/auth/signup") {
+        if (request.method === "GET") {
+          const html =
+            "<!doctype html>" +
+            "<html><head><meta charset=\"utf-8\"><title>StraightShotAuto</title></head>" +
+            "<body style=\"font-family:system-ui, -apple-system, sans-serif; padding:24px; max-width:520px;\">" +
+            "<h2>StraightShotAuto</h2>" +
+            "<p>Create your account.</p>" +
+            "<form id=\"signup-form\">" +
+            "<label>Email<br><input type=\"email\" id=\"email\" required style=\"width:100%; padding:8px; margin:6px 0;\"></label>" +
+            "<label>Password<br><input type=\"password\" id=\"password\" required minlength=\"6\" style=\"width:100%; padding:8px; margin:6px 0;\"></label>" +
+            "<button type=\"submit\" style=\"padding:10px 14px;\">Create account</button>" +
+            "</form>" +
+            "<p id=\"msg\" style=\"margin-top:12px;\"></p>" +
+            "<script>" +
+            "const form=document.getElementById('signup-form');" +
+            "const msg=document.getElementById('msg');" +
+            "form.addEventListener('submit', async (e)=>{" +
+            "e.preventDefault();" +
+            "msg.textContent='Creating account…';" +
+            "const email=document.getElementById('email').value.trim();" +
+            "const password=document.getElementById('password').value;" +
+            "const res=await fetch('/auth/signup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password})});" +
+            "const data=await res.json().catch(()=>({}));" +
+            "if(!res.ok){msg.textContent=data?.error||'Unable to create account';return;}" +
+            "msg.textContent='Account created. You can close this tab and log in from the extension.';" +
+            "});" +
+            "</script>" +
+            "</body></html>";
+          return new Response(html, {
+            status: 200,
+            headers: {
+              "Content-Type": "text/html; charset=utf-8",
+              ...corsHeaders(origin)
+            }
+          });
+        }
+        if (request.method !== "POST") {
+          return jsonResponse({ error: "Method not allowed" }, origin, 405);
+        }
+        let body = null;
+        try {
+          body = await request.json();
+        } catch {
+          body = null;
+        }
+        const email = (body?.email || "").toString().trim();
+        const password = (body?.password || "").toString();
+        if (!email || !password) {
+          return jsonResponse({ error: "Email and password required" }, origin, 400);
+        }
+        if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) {
+          return jsonResponse({ error: "Auth not configured" }, origin, 500);
+        }
+        const res = await fetch(`${env.SUPABASE_URL}/auth/v1/signup`, {
+          method: "POST",
+          headers: {
+            apikey: env.SUPABASE_ANON_KEY,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ email, password })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          return jsonResponse({ error: data?.msg || data?.error_description || "Signup failed" }, origin, 400);
+        }
+        return jsonResponse({ ok: true }, origin, 200);
       }
 
       if (url.pathname === "/auth/status") {

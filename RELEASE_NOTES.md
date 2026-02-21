@@ -1,5 +1,12 @@
 # Release Notes
 
+## 2026-02-21
+- Added password-based auth flow with a dedicated signup page.
+- Added Stripe success/cancel pages on the Worker domain.
+- Fixed subscription status handling to use Stripe subscription state.
+- Enforced free-analysis gating and auto-refresh after checkout.
+- Improved auth UI updates and access-state refresh behavior.
+
 ## 2026-01-22
 - Refined overlay header layout and branding (StraightShot Auto).
 - Improved analysis loading reliability with retries and error states.

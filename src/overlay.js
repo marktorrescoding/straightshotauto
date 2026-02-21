@@ -167,10 +167,10 @@
               <span id="fbco-access-badge" class="fbco-badge fbco-badge-muted">Free</span>
             </div>
             <div class="fbco-access-actions">
-              <input id="fbco-auth-email" class="fbco-input" type="email" placeholder="Email for login code" />
-              <button id="fbco-auth-send" class="fbco-btn" type="button">Send code</button>
-              <input id="fbco-auth-code" class="fbco-input" type="text" placeholder="Enter code" />
-              <button id="fbco-auth-verify" class="fbco-btn" type="button">Verify</button>
+              <input id="fbco-auth-email" class="fbco-input" type="email" placeholder="Email" />
+              <input id="fbco-auth-password" class="fbco-input" type="password" placeholder="Password" />
+              <button id="fbco-auth-login" class="fbco-btn" type="button">Log in</button>
+              <button id="fbco-auth-signup" class="fbco-btn fbco-btn-ghost" type="button">Create account</button>
               <button id="fbco-auth-subscribe" class="fbco-btn fbco-btn-primary" type="button">Subscribe $3/mo</button>
               <button id="fbco-auth-logout" class="fbco-btn fbco-btn-ghost" type="button">Sign out</button>
             </div>
@@ -495,30 +495,37 @@
     if (refreshBtn) cleanupFns.push(() => refreshBtn.removeEventListener("click", onRefresh));
 
     const emailInput = root.querySelector("#fbco-auth-email");
-    const codeInput = root.querySelector("#fbco-auth-code");
-    const sendBtn = root.querySelector("#fbco-auth-send");
-    const verifyBtn = root.querySelector("#fbco-auth-verify");
+    const passwordInput = root.querySelector("#fbco-auth-password");
+    const loginBtn = root.querySelector("#fbco-auth-login");
+    const signupBtn = root.querySelector("#fbco-auth-signup");
     const subscribeBtn = root.querySelector("#fbco-auth-subscribe");
     const logoutBtn = root.querySelector("#fbco-auth-logout");
 
-    const onSend = (e) => {
+    const onLogin = (e) => {
       e.stopPropagation();
+      const email = emailInput?.value?.trim();
+      const password = passwordInput?.value || "";
+      if (!email || !password) return;
+      window.FBCO_saveAuthEmail && window.FBCO_saveAuthEmail(email);
+      window.FBCO_authLogin && window.FBCO_authLogin(email, password);
+    };
+    loginBtn?.addEventListener("click", onLogin);
+    if (loginBtn) cleanupFns.push(() => loginBtn.removeEventListener("click", onLogin));
+
+    const onSignup = (e) => {
+      e.stopPropagation();
+      window.FBCO_openSignup && window.FBCO_openSignup();
+    };
+    signupBtn?.addEventListener("click", onSignup);
+    if (signupBtn) cleanupFns.push(() => signupBtn.removeEventListener("click", onSignup));
+
+    const onEmailChange = () => {
       const email = emailInput?.value?.trim();
       if (!email) return;
-      window.FBCO_authSendCode && window.FBCO_authSendCode(email);
+      window.FBCO_saveAuthEmail && window.FBCO_saveAuthEmail(email);
     };
-    sendBtn?.addEventListener("click", onSend);
-    if (sendBtn) cleanupFns.push(() => sendBtn.removeEventListener("click", onSend));
-
-    const onVerify = (e) => {
-      e.stopPropagation();
-      const email = emailInput?.value?.trim();
-      const code = codeInput?.value?.trim();
-      if (!email || !code) return;
-      window.FBCO_authVerifyCode && window.FBCO_authVerifyCode(email, code);
-    };
-    verifyBtn?.addEventListener("click", onVerify);
-    if (verifyBtn) cleanupFns.push(() => verifyBtn.removeEventListener("click", onVerify));
+    emailInput?.addEventListener("change", onEmailChange);
+    if (emailInput) cleanupFns.push(() => emailInput.removeEventListener("change", onEmailChange));
 
     const onSubscribe = (e) => {
       e.stopPropagation();
@@ -1001,9 +1008,9 @@
     const accessBadgeEl = document.getElementById("fbco-access-badge");
     const authMessageEl = document.getElementById("fbco-auth-message");
     const authEmailEl = document.getElementById("fbco-auth-email");
-    const authCodeEl = document.getElementById("fbco-auth-code");
-    const authSendBtn = document.getElementById("fbco-auth-send");
-    const authVerifyBtn = document.getElementById("fbco-auth-verify");
+    const authPasswordEl = document.getElementById("fbco-auth-password");
+    const authLoginBtn = document.getElementById("fbco-auth-login");
+    const authSignupBtn = document.getElementById("fbco-auth-signup");
     const authSubscribeBtn = document.getElementById("fbco-auth-subscribe");
     const authLogoutBtn = document.getElementById("fbco-auth-logout");
 
@@ -1070,32 +1077,47 @@
       const msg = access?.message || window.FBCO_STATE?.authMessage || "";
       authMessageEl.textContent = msg || "—";
     }
+    const isAuthed = Boolean(access?.authenticated);
+    const isValidated = Boolean(access?.validated);
     if (accessStatusEl) {
-      if (access?.validated) {
+      if (isValidated) {
         accessStatusEl.textContent = "Unlocked: subscription active.";
       } else if (gated) {
         accessStatusEl.textContent = "Free limit reached. Unlock full results below.";
+      } else if (isAuthed) {
+        accessStatusEl.textContent = "Signed in. Subscribe to unlock full results.";
       } else {
-        accessStatusEl.textContent = `Free analyses remaining: ${access?.freeRemaining ?? "—"}`;
+        accessStatusEl.textContent = `Free analyses remaining: ${access?.freeRemaining ?? "—"} — log in or sign up for unlimited.`;
       }
     }
     if (accessBadgeEl) {
-      if (access?.validated) {
+      if (isValidated) {
         accessBadgeEl.textContent = "Unlocked";
         accessBadgeEl.classList.remove("fbco-badge-muted");
       } else {
-        accessBadgeEl.textContent = access?.authenticated ? "Signed in" : "Free";
+        accessBadgeEl.textContent = isAuthed ? "Signed in" : "Free";
         accessBadgeEl.classList.add("fbco-badge-muted");
       }
     }
-    if (authEmailEl && access?.email && !authEmailEl.value) {
-      authEmailEl.value = access.email;
+    if (authEmailEl) {
+      const nextEmail = access?.email || access?.lastEmail || "";
+      if (nextEmail && !authEmailEl.value) authEmailEl.value = nextEmail;
     }
-    if (authSendBtn) authSendBtn.disabled = access?.validated;
-    if (authVerifyBtn) authVerifyBtn.disabled = access?.validated;
-    if (authSubscribeBtn) authSubscribeBtn.disabled = access?.validated;
-    if (authLogoutBtn) authLogoutBtn.disabled = !access?.authenticated;
-    if (authCodeEl) authCodeEl.disabled = access?.validated;
+    if (authEmailEl) setVisible(authEmailEl, !isAuthed);
+    if (authPasswordEl) setVisible(authPasswordEl, !isAuthed);
+    if (authLoginBtn) {
+      setVisible(authLoginBtn, !isAuthed);
+      authLoginBtn.disabled = isValidated;
+    }
+    if (authSignupBtn) setVisible(authSignupBtn, !isAuthed);
+    if (authSubscribeBtn) {
+      setVisible(authSubscribeBtn, isAuthed && !isValidated);
+      authSubscribeBtn.disabled = isValidated;
+    }
+    if (authLogoutBtn) {
+      setVisible(authLogoutBtn, isAuthed);
+      authLogoutBtn.disabled = !isAuthed;
+    }
 
     root.dataset.loading = busy ? "1" : "0";
     const loadingTextEl = document.getElementById("fbco-loading-text");
