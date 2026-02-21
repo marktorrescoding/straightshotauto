@@ -231,14 +231,13 @@
 
   function parseDrivetrain(text) {
     if (!text) return null;
-    const m = text.match(/\b(4x4|4wd|awd|fwd|rwd|2wd)\b/i);
+    const t = String(text).toLowerCase();
+    if (/\b(2|two)\s*[-\s]?\s*wheel\s*[-\s]?\s*drive\b/.test(t)) return "2WD";
+    if (/\b(4|four)\s*[-\s]?\s*wheel\s*[-\s]?\s*drive\b/.test(t)) return "4WD";
+
+    const m = t.match(/\b(4x4|4wd|awd|fwd|rwd|2wd)\b/);
     if (!m) return null;
     const v = m[1].toUpperCase();
-    if (v === "4WD") return "4WD";
-    if (v === "AWD") return "AWD";
-    if (v === "FWD") return "FWD";
-    if (v === "RWD") return "RWD";
-    if (v === "2WD") return "2WD";
     if (v === "4X4") return "4x4";
     return v;
   }
@@ -300,10 +299,39 @@
 
   function parseTitleStatus(text) {
     if (!text) return null;
+
     if (/salvage|salvamento/i.test(text)) return "salvage";
-    if (/rebuilt|rebuild/i.test(text)) return "rebuilt";
-    if (/clean\s+title/i.test(text)) return "clean";
-    if (/lien/i.test(text)) return "lien";
+    if (/rebuilt|rebuild|reconstruido/i.test(text)) return "rebuilt";
+    if (/lien|gravamen/i.test(text)) return "lien";
+
+    if (/\bclean\s+title\b/i.test(text)) return "clean_seller_claimed";
+    if (/\bt[ií]tulo\s+limpio\b/i.test(text) || /\btitulo\s+limpio\b/i.test(text)) {
+      return "clean_seller_claimed";
+    }
+
+    return null;
+  }
+
+  function inferTitleStatusNotMentioned(sellerText, aboutText, rawTitle) {
+    const combined = [sellerText, aboutText, rawTitle].filter(Boolean).join("\n");
+    if (!combined) return null;
+    if (/\b(title|t[ií]tulo|salvage|salvamento|rebuilt|reconstruido|lien|gravamen)\b/i.test(combined)) {
+      return null;
+    }
+    return "unknown_not_mentioned";
+  }
+
+  function parseTrim(text) {
+    if (!text) return null;
+    const m = text.match(/\b(SR5|Limited|TRD|Platinum|Sport)\b/i);
+    return m ? m[1].toUpperCase() : null;
+  }
+
+  function inferVehicleTypeHint(text) {
+    const t = (text || "").toLowerCase();
+    if (/\b(truck|pickup|tundra|f-150|silverado|ram)\b/.test(t)) return "truck";
+    if (/\b(suv|fj|4runner|tahoe|suburban|wrangler)\b/.test(t)) return "suv";
+    if (/\b(crossover|rav4|cr-v|escape|rogue)\b/.test(t)) return "crossover";
     return null;
   }
 
@@ -372,6 +400,17 @@
     }
 
     return out;
+  }
+
+  function buildNegotiationPoints(v) {
+    const pts = [];
+    if (!v.title_status) pts.push("Title status not stated — ask if clean/salvage/rebuilt.");
+    if (!v.drivetrain) pts.push("Drivetrain not stated — confirm 2WD vs 4WD.");
+    if (v.mileage_miles && v.mileage_miles >= 150000) {
+      pts.push("High mileage — request maintenance records + pre-purchase inspection.");
+    }
+    if (!v.vin) pts.push("VIN not listed — ask for VIN to run history check.");
+    return pts.slice(0, 6);
   }
 
   function normalizeSellerDescription(text) {
@@ -468,11 +507,19 @@
       findSectionTextByHeading(/^Description$/i);
     const seller_description = normalizeSellerDescription(sellerText);
 
-    const vin = parseVin(sellerText);
-    const title_status = parseTitleStatus(sellerText);
+    const vin = parseVin(sellerText) || parseVin(aboutText) || null;
+    const titleFromSeller = parseTitleStatus(sellerText);
+    const titleFromAbout = parseTitleStatus(aboutText);
+    const titleFromRaw = parseTitleStatus(raw);
+    let title_status = titleFromSeller || titleFromAbout || titleFromRaw || null;
+    if (!title_status) {
+      title_status = inferTitleStatusNotMentioned(sellerText, aboutText, raw);
+    }
 
-    const descDrivetrain = about.drivetrain || parseDrivetrain(sellerText);
-    const descTransmission = about.transmission || parseTransmission(sellerText);
+    const sellerDrivetrain = parseDrivetrain(sellerText);
+    const sellerTransmission = parseTransmission(sellerText);
+    const descDrivetrain = about.drivetrain || sellerDrivetrain;
+    const descTransmission = about.transmission || sellerTransmission;
     const descFuel = about.fuel_type || parseFuelType(sellerText);
     const descColors = parseColors(sellerText);
     const descMpg = parseMpg(sellerText);
@@ -483,12 +530,43 @@
     const signalVehicle = hasVehicleSignals();
     const vehicleStatus = categoryIsVehicle === null ? (signalVehicle ? true : null) : categoryIsVehicle;
 
+    const trimFromTitle = parseTrim(raw);
+    const trimFromSeller = parseTrim(sellerText);
+    const trimFromAbout = parseTrim(aboutText);
+    const trim = trimFromTitle || trimFromSeller || trimFromAbout;
+    const trim_conflict =
+      (trimFromTitle && trimFromSeller && trimFromTitle !== trimFromSeller) ||
+      (trimFromTitle && trimFromAbout && trimFromTitle !== trimFromAbout) ||
+      (trimFromSeller && trimFromAbout && trimFromSeller !== trimFromAbout) ||
+      false;
+    const provenance = {
+      title_status_source: titleFromSeller
+        ? "seller_description"
+        : titleFromAbout
+          ? "about_vehicle"
+          : titleFromRaw
+            ? "title"
+            : null,
+      drivetrain_source: about.drivetrain ? "about_vehicle" : sellerDrivetrain ? "seller_description" : null,
+      transmission_source: about.transmission ? "about_vehicle" : sellerTransmission ? "seller_description" : null
+    };
+
+    const negotiation_points = buildNegotiationPoints({
+      title_status,
+      drivetrain: descDrivetrain,
+      mileage_miles: mileage.mileage_miles,
+      vin
+    });
+    const vehicle_type_hint = inferVehicleTypeHint(raw || "") || null;
+
     return {
       url: location.href,
       source_text: raw || null,
       year: parsed?.year || null,
       make: parsed?.make || null,
       model: parsed?.model || null,
+      trim: trim || null,
+      trim_conflict,
       normalized: parsed?.normalized || null,
       price_text: price_text || null,
       price_usd: price_usd != null ? price_usd : null,
@@ -508,7 +586,10 @@
       title_status: title_status || null,
       vin: vin || null,
       seller_description: seller_description || null,
-      about_items: about.about_items || []
+      about_items: about.about_items || [],
+      provenance,
+      negotiation_points,
+      vehicle_type_hint
     };
   };
 })();

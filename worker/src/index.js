@@ -1,34 +1,46 @@
 const SYSTEM_PROMPT =
   [
     "You are an experienced used-car evaluator and mechanic.",
-    "Your job: help a buyer decide whether to buy a specific used car listing.",
-    "Be direct, practical, and specific to the exact year/make/model + mileage + seller notes.",
+    "Return ONLY valid JSON matching the provided schema. No markdown. No extra keys.",
     "",
-    "Hard rules:",
-    "- Do NOT invent facts (recalls, failures, pricing) if you are not confident. Use 'unknown' or omit that issue.",
-    "- Title claims must reflect the snapshot; never claim 'clean title' unless seller text explicitly says it.",
-    "- Service items must be correct for the exact year/generation/engine; if unsure, say 'unknown' or use safe generic maintenance.",
-    "- Lifespan tone must be realistic for durable platforms unless an active symptom is present.",
-    "- Do NOT assume CVT. Only mention CVT-related risks if that year/model is actually known to use a CVT.",
-    "- Do NOT label something a 'well-known issue' unless you are highly confident for that exact year/generation.",
-    "- Calibrate for brand/platform: a high-mileage Toyota is not automatically end-of-life; some vehicles routinely exceed 200k+.",
-    "- Keep the verdict aligned with the score (e.g., do not say 'walk away' with a 'Fair/Good' score).",
-    "- If data is missing (trim/engine/transmission/drivetrain/service history), explicitly state how uncertainty affects confidence.",
+    "Truthfulness rules:",
+    "- Never invent facts. If unsure, use 'unknown' or omit by using empty arrays where allowed.",
+    "- Never claim clean title unless seller text explicitly states it.",
+    "- Never assume CVT or platform-wide 'well-known issues' unless you are highly confident for this exact year/generation/powertrain.",
     "",
-    "Lifespan rule:",
-    "- You will be given 'lifespan anchors' (best/avg/worst) for this year/model class. Use them to calibrate remaining_lifespan_estimate,",
-    "  then adjust based on THIS listing’s mileage, service claims, title status, and any active symptoms.",
+    "Classification rules:",
+    "- 'common_issues' = only highly confident platform/generation issues (not tires/brakes/wear). If not sure, return [].",
+    "- Wear items (tires/brakes/suspension wear) go in 'wear_items', not 'common_issues'.",
     "",
-    "Output MUST be valid JSON that matches the schema exactly. No markdown, no extra keys."
+    "Consistency rules:",
+    "- Keep verdict aligned with score band.",
+    "- Missing key data must reduce confidence and be called out in notes."
   ].join("\n");
 
 const CACHE_TTL_SECONDS = 60 * 60 * 24;
 const CACHE_VERSION = "v7"; // bumped because lifespan output is now model-driven with anchors
-const RATE_MIN_INTERVAL_MS = 5000;
+const RATE_MIN_INTERVAL_MS = 0;
 const RATE_WINDOW_MS = 60 * 60 * 1000;
-const RATE_MAX_REQUESTS = 30;
+const RATE_MAX_REQUESTS = 120;
 
 const rateState = new Map();
+const inFlight = new Map();
+
+async function dedupe(key, fn) {
+  const existing = inFlight.get(key);
+  if (existing) return existing;
+
+  const p = (async () => {
+    try {
+      return await fn();
+    } finally {
+      inFlight.delete(key);
+    }
+  })();
+
+  inFlight.set(key, p);
+  return p;
+}
 
 function corsHeaders(origin) {
   const allowOrigin = origin || "*";
@@ -46,6 +58,17 @@ function jsonResponse(body, origin, status = 200) {
     headers: {
       "Content-Type": "application/json",
       "Cache-Control": `public, s-maxage=${CACHE_TTL_SECONDS}`,
+      ...corsHeaders(origin)
+    }
+  });
+}
+
+function htmlResponse(html, origin, status = 200) {
+  return new Response(html, {
+    status,
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store",
       ...corsHeaders(origin)
     }
   });
@@ -86,6 +109,47 @@ async function hashString(input) {
   return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+function normalizeKeyString(value) {
+  if (typeof value !== "string") return value ?? null;
+  const trimmed = value.trim().replace(/\s+/g, " ");
+  return trimmed || null;
+}
+
+function normalizeKeyArray(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map((v) => normalizeKeyString(v)).filter(Boolean).sort();
+}
+
+function normalizeListingId(url) {
+  if (!url) return "";
+  try {
+    const u = new URL(url);
+    const m = u.pathname.match(/\/marketplace\/item\/(\d+)/);
+    return m ? m[1] : u.pathname || "";
+  } catch {
+    return String(url);
+  }
+}
+
+function canonicalSnapshot(snapshot) {
+  const listingId = normalizeListingId(snapshot?.url);
+  return {
+    listing_id: listingId || null,
+    vin: normalizeKeyString(snapshot?.vin),
+    year: snapshot?.year ?? null,
+    make: normalizeKeyString(snapshot?.make),
+    model: normalizeKeyString(snapshot?.model),
+    trim: normalizeKeyString(snapshot?.trim),
+    drivetrain: normalizeKeyString(snapshot?.drivetrain),
+    transmission: normalizeKeyString(snapshot?.transmission),
+    engine: normalizeKeyString(snapshot?.engine),
+    price_usd: snapshot?.price_usd ?? null,
+    mileage_miles: snapshot?.mileage_miles ?? null,
+    seller_description: normalizeKeyString(snapshot?.seller_description),
+    about_items: normalizeKeyArray(snapshot?.about_items)
+  };
+}
+
 function clamp(n, min, max) {
   return Math.min(Math.max(n, min), max);
 }
@@ -118,16 +182,184 @@ function normalizeText(value) {
   return (value || "").toString().toLowerCase();
 }
 
-function deriveTitleStatus(snapshot) {
-  const explicit = normalizeText(snapshot?.title_status);
-  if (explicit) return explicit;
-  const text = normalizeText(
-    [snapshot?.seller_description, snapshot?.source_text, ...(snapshot?.about_items || [])].join(" ")
+function getAuthToken(request) {
+  const header = request.headers.get("Authorization") || "";
+  if (header.toLowerCase().startsWith("bearer ")) return header.slice(7).trim();
+  return null;
+}
+
+async function fetchSupabaseUser(token, env) {
+  if (!token) return null;
+  if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) return null;
+  const res = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      apikey: env.SUPABASE_ANON_KEY
+    }
+  });
+  if (!res.ok) return null;
+  return res.json();
+}
+
+async function supabaseAdminRequest(path, env, options = {}) {
+  if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) return null;
+  const res = await fetch(`${env.SUPABASE_URL}${path}`, {
+    ...options,
+    headers: {
+      apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      "Content-Type": "application/json",
+      ...(options.headers || {})
+    }
+  });
+  if (!res.ok) return null;
+  if (res.status === 204) return {};
+  return res.json();
+}
+
+async function fetchSupabaseUserByEmail(email, env) {
+  if (!email) return null;
+  if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) return null;
+  const res = await fetch(
+    `${env.SUPABASE_URL}/auth/v1/admin/users?email=${encodeURIComponent(email)}`,
+    {
+      headers: {
+        apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`
+      }
+    }
   );
-  if (!text) return "unknown";
-  if (/(salvage|rebuilt|rebuild|reconstructed|branded)/i.test(text)) return "rebuilt";
-  if (/(lien)/i.test(text)) return "lien";
-  if (/(clean title)/i.test(text)) return "clean";
+  if (!res.ok) return null;
+  const data = await res.json();
+  if (Array.isArray(data?.users)) return data.users[0] || null;
+  if (Array.isArray(data)) return data[0] || null;
+  return data?.user || null;
+}
+
+async function createSupabaseUserForEmail(email, env) {
+  if (!email) return null;
+  if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) return null;
+  const res = await fetch(`${env.SUPABASE_URL}/auth/v1/admin/users`, {
+    method: "POST",
+    headers: {
+      apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ email, email_confirm: true })
+  });
+  if (!res.ok) return null;
+  return res.json();
+}
+
+async function findOrCreateSupabaseUserByEmail(email, env) {
+  let user = await fetchSupabaseUserByEmail(email, env);
+  if (user?.id) return user;
+  user = await createSupabaseUserForEmail(email, env);
+  if (user?.id) return user;
+  return null;
+}
+
+async function getSubscriptionRecord(userId, env) {
+  if (!userId) return null;
+  const path = `/rest/v1/subscriptions?user_id=eq.${userId}&select=user_id,status,plan,updated_at,stripe_customer_id&order=updated_at.desc&limit=1`;
+  const data = await supabaseAdminRequest(path, env);
+  return Array.isArray(data) ? data[0] : null;
+}
+
+function isSubscriptionActive(record) {
+  const status = normalizeText(record?.status);
+  return status === "active" || status === "trialing";
+}
+
+async function stripeRequest(env, path, body) {
+  if (!env.STRIPE_SECRET_KEY) {
+    return { ok: false, status: 500, error: "Missing STRIPE_SECRET_KEY" };
+  }
+  const res = await fetch(`https://api.stripe.com/v1/${path}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${env.STRIPE_SECRET_KEY}`,
+      "Content-Type": "application/x-www-form-urlencoded"
+    },
+    body
+  });
+  let data = null;
+  try {
+    data = await res.json();
+  } catch {
+    data = null;
+  }
+  if (!res.ok) {
+    return {
+      ok: false,
+      status: res.status,
+      error: data?.error?.message || "Stripe request failed",
+      raw: data
+    };
+  }
+  return { ok: true, status: res.status, data };
+}
+
+async function stripeGetRequest(env, path) {
+  if (!env.STRIPE_SECRET_KEY) {
+    return { ok: false, status: 500, error: "Missing STRIPE_SECRET_KEY" };
+  }
+  const res = await fetch(`https://api.stripe.com/v1/${path}`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${env.STRIPE_SECRET_KEY}`,
+      "Content-Type": "application/x-www-form-urlencoded"
+    }
+  });
+  let data = null;
+  try {
+    data = await res.json();
+  } catch {
+    data = null;
+  }
+  if (!res.ok) {
+    return {
+      ok: false,
+      status: res.status,
+      error: data?.error?.message || "Stripe request failed",
+      raw: data
+    };
+  }
+  return { ok: true, status: res.status, data };
+}
+
+function hexFromBuffer(buf) {
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function verifyStripeSignature(payload, signatureHeader, secret) {
+  if (!signatureHeader || !secret) return false;
+  const parts = signatureHeader.split(",").map((p) => p.trim());
+  const timestampPart = parts.find((p) => p.startsWith("t="));
+  const sigPart = parts.find((p) => p.startsWith("v1="));
+  if (!timestampPart || !sigPart) return false;
+
+  const timestamp = timestampPart.split("=")[1];
+  const signature = sigPart.split("=")[1];
+  const signedPayload = `${timestamp}.${payload}`;
+
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(signedPayload));
+  return hexFromBuffer(mac) === signature;
+}
+
+function deriveTitleStatus(snapshot) {
+  const explicit = snapshot?.title_status;
+  if (explicit) return normalizeText(explicit);
   return "unknown";
 }
 
@@ -900,8 +1132,13 @@ function coerceAndFill(raw, snapshot) {
 
   // Score: prefer model score, else derive from confidence (but don't overwrite a valid score)
   let score = asNumber(raw.overall_score, null);
-  if (score == null) score = Math.round(out.confidence * 100);
-  out.overall_score = clamp(Math.round(score), 0, 100);
+  const confidenceScore = Math.round(out.confidence * 100);
+  if (score == null) score = confidenceScore;
+  score = clamp(Math.round(score), 0, 100);
+  if (Number.isFinite(score) && Math.abs(score - confidenceScore) >= 40) {
+    score = confidenceScore;
+  }
+  out.overall_score = score;
 
   out.final_verdict = asString(raw.final_verdict);
 
@@ -1043,220 +1280,517 @@ const RESPONSE_SCHEMA = {
 export default {
   async fetch(request, env, ctx) {
     const origin = request.headers.get("Origin") || "";
-    const url = new URL(request.url);
-
-    if (request.method === "OPTIONS") {
-      return new Response(null, { status: 204, headers: corsHeaders(origin) });
-    }
-
-    if (url.pathname !== "/analyze") {
-      return jsonResponse({ error: "Not found" }, origin, 404);
-    }
-
-    if (request.method !== "POST") {
-      return jsonResponse({ error: "Method not allowed" }, origin, 405);
-    }
-
-    let payload = null;
     try {
-      payload = await request.json();
-    } catch {
-      return jsonResponse({ error: "Invalid JSON body" }, origin, 400);
-    }
+      const url = new URL(request.url);
 
-    const snapshot = {
-      url: payload?.url || null,
-      source_text: payload?.source_text || null,
-      year: payload?.year || null,
-      make: payload?.make || null,
-      model: payload?.model || null,
-      drivetrain: payload?.drivetrain || null,
-      transmission: payload?.transmission || null,
-      engine: payload?.engine || null,
-      title_status: payload?.title_status || null,
-      owners: payload?.owners ?? null,
-      price_usd: payload?.price_usd ?? null,
-      mileage_miles: payload?.mileage_miles ?? null,
-      seller_description: payload?.seller_description || null,
-      about_items: payload?.about_items || []
-    };
+      if (request.method === "OPTIONS") {
+        return new Response(null, { status: 204, headers: corsHeaders(origin) });
+      }
 
-    if (!snapshot.year || !snapshot.make) {
-      return jsonResponse({ error: "Missing required fields", required: ["year", "make"] }, origin, 400);
-    }
-
-    const lifespanAnchors = buildLifespanAnchorsForPrompt(snapshot);
-
-    const snapshotKey = await hashString(JSON.stringify(snapshot));
-    const cacheKey = new Request(`https://cache.car-bot.local/analyze/${CACHE_VERSION}/${snapshotKey}`);
-    const cache = caches.default;
-
-    const cached = await cache.match(cacheKey);
-    if (cached) {
-      const withCors = new Response(cached.body, cached);
-      withCors.headers.set("Access-Control-Allow-Origin", origin || "*");
-      withCors.headers.set("X-Cache", "HIT");
-      return withCors;
-    }
-
-    const ip = getClientIp(request);
-    const rate = checkRateLimit(ip);
-    if (!rate.ok) {
-      const retryAfter = Math.max(1, Math.ceil((rate.retryAfterMs || 0) / 1000));
-      return new Response(JSON.stringify({ error: "Rate limited", retry_after_seconds: retryAfter }), {
-        status: 429,
-        headers: {
-          "Content-Type": "application/json",
-          "Retry-After": String(retryAfter),
-          ...corsHeaders(origin)
+      if (url.pathname === "/stripe/webhook") {
+        if (request.method !== "POST") {
+          return jsonResponse({ error: "Method not allowed" }, origin, 405);
         }
-      });
-    }
+        const signature = request.headers.get("Stripe-Signature");
+        const payloadText = await request.text();
+        const verified = await verifyStripeSignature(payloadText, signature, env.STRIPE_WEBHOOK_SECRET);
+        if (!verified) return jsonResponse({ error: "Invalid signature" }, origin, 400);
 
-    if (!env.OPENAI_API_KEY) {
-      return jsonResponse({ error: "Server missing OPENAI_API_KEY" }, origin, 500);
-    }
+        let event = null;
+        try {
+          event = JSON.parse(payloadText);
+        } catch {
+          return jsonResponse({ error: "Invalid webhook payload" }, origin, 400);
+        }
 
-    // Prompt: forces specificity + practical guidance + avoids CVT assumptions
-    const userPrompt = [
-      "Analyze this used car listing snapshot and decide whether a buyer should purchase it.",
-      "Be specific to THIS year/make/model and this mileage/price. Avoid generic advice.",
-      "Write like an experienced mechanic advising a friend who will actually spend money.",
-      "",
-      "Snapshot JSON:",
-      JSON.stringify(snapshot, null, 2),
-      "",
-      "Lifespan anchors (use to calibrate remaining_lifespan_estimate; adjust for THIS listing):",
-      JSON.stringify(lifespanAnchors, null, 2),
-      "",
-      "Requirements:",
-      "- Give a clear recommendation: buy / conditional buy / avoid, and explain the reason in plain language.",
-      "- Calibrate for the make/platform: high-mileage Toyotas are not automatically end-of-life; some platforms are.",
-      "- Provide a realistic 6–18 month maintenance outlook at this mileage (not generic).",
-      "- Title claims must be quoted from seller text; do NOT claim 'clean title' unless explicitly stated.",
-      "- Service items must be correct for the exact year/engine; if unsure, say 'unknown' or stick to safe generic maintenance.",
-      "- COMMON ISSUES: only include items you are highly confident apply to this exact year/generation/engine family.",
-      "- Do NOT label generic wear items (brakes, tires, suspension wear) as common issues. Put them under wear_items.",
-      "- If no platform-known issues are highly confident, common_issues should be an empty array.",
-      "- Do NOT mention CVT-related issues unless this exact year/model is known to use a CVT.",
-      "",
-      "Costs:",
-      "- estimated_cost_diy and estimated_cost_shop must be realistic ranges like \"$150–$300\" (not single numbers).",
-      "",
-      "Buyer questions (IMPORTANT):",
-      "- Must be specific to this listing and known platform risks.",
-      "- Do NOT ask generic questions like 'Any issues?' or 'Any accidents?' unless title/history is unclear and you explain why it matters.",
-      "",
-      "Deal-breakers:",
-      "- Include 3–6 deal_breakers: specific symptoms/findings that should make the buyer walk away immediately.",
-      "",
-      "Mileage wording:",
-      "- For durable platforms (e.g., 4Runner, Land Cruiser, some Honda/Toyota trucks), 100k–120k is mid-life, not 'high mileage'.",
-      "- Use language like 'service interval due' or 'maintenance history matters' instead of 'high mileage' when appropriate.",
-      "",
-      "Lifespan framing (REQUIRED):",
-      "- remaining_lifespan_estimate MUST include Best-case / Average-case / Worst-case.",
-      "- Each case must state the assumption in parentheses.",
-      "- If listing includes an active symptom, Worst-case MUST assume it is a major root cause and be materially shorter.",
-      "- Avoid catastrophic tone unless a known platform failure is documented; use wording like \"if deferred maintenance or hidden issues are present.\"",
-      "- If no active symptom is present, worst-case should not be less than ~10k miles / 1 year.",
-      "- Prefer miles + time when possible (e.g., \"20k–60k miles / 1–3 years\").",
-      "",
-      "Buyer questions format (REQUIRED):",
-      "- Provide 4–7 questions.",
-      "- At least 2 questions MUST name a specific component/system (e.g., PTU, water pump, steering rack, turbo, diff, transfer case).",
-      "- Include 1–2 platform-specific component questions when relevant (e.g., timing chain guides, tensioners, transfer case).",
-      "- Do NOT include generic questions like 'Any issues?' or 'Any accidents?' unless title/history is missing and you explain why it matters.",
-      "- Each question must include a short why-it-matters note in parentheses (4–8 words).",
-      "  Example: \"Has the PTU fluid ever been changed? (AWD failure point)\"",
-      "",
-      "Engine specificity (REQUIRED):",
-      "- If engine/variant is unknown and materially affects reliability, explicitly state how each plausible engine changes risk.",
-      "- Example: \"If 3.5L EcoBoost: timing chain/turbo risk increases after 120k; if 5.0L V8: valvetrain/oil consumption more relevant.\"",
-      "- Use this uncertainty to adjust confidence and risk_flags.",
-      "",
-      "Common issues empty handling:",
-      "- If common_issues is empty, briefly explain why in year_model_reputation or notes.",
-      "- Use language like: \"No platform-wide deal-breaker issues are strongly documented for this year, but age-related wear still applies.\"",
-      "- Avoid absolute claims; if mentioning platform-wide issues, include uncertainty and verification language.",
-      "",
-      "Completed service handling:",
-      "- If the seller explicitly states a service was completed recently, reflect that and shift focus to the NEXT interval.",
-      "",
-      "Risk flags format (REQUIRED):",
-      "- Provide 3–6 risk_flags.",
-      "- Each risk flag MUST include (a) the component/system and (b) the consequence (cost/safety/driveability).",
-      "- Avoid vague flags like 'high mileage' unless paired with a consequence.",
-      "  Example: \"195k miles + AWD → PTU wear risk ($800–$2,000)\"",
-      "",
-      "Extreme mileage guardrail:",
-      "- For vehicles at or above 250k miles, overall_score should rarely exceed 45.",
-      "- Confidence should not exceed 0.75 unless detailed service records are provided.",
-      "- Such vehicles should be framed as end-of-life, beater, or project even on durable platforms.",
-      "",
-      "Score/verdict consistency rules:",
-      "- If final_verdict says 'walk away' or 'avoid', overall_score MUST be <= 34 unless you name exactly one deal-breaker that must be confirmed.",
-      "- If overall_score >= 55, final_verdict MUST NOT say 'walk away'—it must be a conditional buy at worst.",
-      "",
-      "Output must match the JSON schema exactly. No extra keys."
-    ].join("\n");
+        const eventType = event?.type || "";
+        const dataObject = event?.data?.object || {};
+        let userId = dataObject?.client_reference_id || dataObject?.metadata?.user_id || null;
+        if (!userId) {
+          const email = dataObject?.customer_details?.email || dataObject?.customer_email || null;
+          const user = await findOrCreateSupabaseUserByEmail(email, env);
+          userId = user?.id || null;
+        }
 
-    // Use JSON schema to improve structure reliability
-    const openaiRes = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${env.OPENAI_API_KEY}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        temperature: 0.25,
-        text: {
-          format: {
-            type: "json_schema",
-            name: RESPONSE_SCHEMA.name,
-            schema: RESPONSE_SCHEMA.schema
+        if (userId) {
+          let status = "unknown";
+          if (eventType.startsWith("customer.subscription.")) {
+            status = dataObject?.status || "unknown";
+          } else if (eventType === "checkout.session.completed") {
+            status = dataObject?.subscription_status || dataObject?.status || "unknown";
+            if (dataObject?.subscription && env.STRIPE_SECRET_KEY) {
+              const subRes = await stripeGetRequest(env, `subscriptions/${dataObject.subscription}`);
+              if (subRes?.ok && subRes?.data?.status) status = subRes.data.status;
+            }
+          } else {
+            status = dataObject?.subscription_status || dataObject?.status || "unknown";
           }
+          const stripeCustomerId = dataObject?.customer || dataObject?.customer_id || null;
+          await supabaseAdminRequest("/rest/v1/subscriptions", env, {
+            method: "POST",
+            headers: { Prefer: "resolution=merge-duplicates" },
+            body: JSON.stringify({
+              user_id: userId,
+              status,
+              plan: "monthly",
+              stripe_customer_id: stripeCustomerId,
+              updated_at: new Date().toISOString()
+            })
+          });
+        }
+
+        return jsonResponse({ received: true, type: eventType }, origin, 200);
+      }
+
+      if (url.pathname === "/") {
+        const html =
+          "<!doctype html>" +
+          "<html><head><meta charset=\"utf-8\"><title>StraightShotAuto</title></head>" +
+          "<body style=\"font-family:system-ui, -apple-system, sans-serif; padding:24px;\">" +
+          "<h2>StraightShotAuto</h2>" +
+          "<p>Sign-in received. You can close this tab and return to Facebook Marketplace.</p>" +
+          "</body></html>";
+        return new Response(html, {
+          status: 200,
+          headers: {
+            "Content-Type": "text/html; charset=utf-8",
+            ...corsHeaders(origin)
+          }
+        });
+      }
+
+      if (url.pathname === "/auth/callback") {
+        const html =
+          "<!doctype html>" +
+          "<html><head><meta charset=\"utf-8\"><title>StraightShotAuto</title></head>" +
+          "<body style=\"font-family:system-ui, -apple-system, sans-serif; padding:24px;\">" +
+          "<h2>StraightShotAuto</h2>" +
+          "<p>Sign-in received. You can close this tab and return to Facebook Marketplace.</p>" +
+          "</body></html>";
+        return htmlResponse(html, origin, 200);
+      }
+
+      if (url.pathname === "/success") {
+        const html =
+          "<!doctype html>" +
+          "<html><head><meta charset=\"utf-8\"><title>StraightShotAuto</title></head>" +
+          "<body style=\"font-family:system-ui, -apple-system, sans-serif; padding:24px; background:#f7f6f2;\">" +
+          "<div style=\"max-width:640px; margin:10vh auto; background:#fff; border:1px solid #e6e2d8; padding:24px; border-radius:12px;\">" +
+          "<h2 style=\"margin:0 0 8px; font-size:22px;\">Payment successful</h2>" +
+          "<p style=\"margin:0; font-size:15px; line-height:1.5;\">Your subscription is active. You can close this tab and return to Facebook Marketplace.</p>" +
+          "<p style=\"margin-top:12px; color:#6b6b6b;\">StraightShotAuto</p>" +
+          "</div></body></html>";
+        return htmlResponse(html, origin, 200);
+      }
+
+      if (url.pathname === "/cancel") {
+        const html =
+          "<!doctype html>" +
+          "<html><head><meta charset=\"utf-8\"><title>StraightShotAuto</title></head>" +
+          "<body style=\"font-family:system-ui, -apple-system, sans-serif; padding:24px; background:#f7f6f2;\">" +
+          "<div style=\"max-width:640px; margin:10vh auto; background:#fff; border:1px solid #e6e2d8; padding:24px; border-radius:12px;\">" +
+          "<h2 style=\"margin:0 0 8px; font-size:22px;\">Payment canceled</h2>" +
+          "<p style=\"margin:0; font-size:15px; line-height:1.5;\">No charges were made. You can close this tab and return to Facebook Marketplace.</p>" +
+          "<p style=\"margin-top:12px; color:#6b6b6b;\">StraightShotAuto</p>" +
+          "</div></body></html>";
+        return htmlResponse(html, origin, 200);
+      }
+
+      if (url.pathname === "/auth/signup") {
+        if (request.method === "GET") {
+          const html =
+            "<!doctype html>" +
+            "<html><head><meta charset=\"utf-8\"><title>StraightShotAuto</title></head>" +
+            "<body style=\"font-family:system-ui, -apple-system, sans-serif; padding:24px; max-width:520px;\">" +
+            "<h2>StraightShotAuto</h2>" +
+            "<p>Create your account.</p>" +
+            "<form id=\"signup-form\">" +
+            "<label>Email<br><input type=\"email\" id=\"email\" required style=\"width:100%; padding:8px; margin:6px 0;\"></label>" +
+            "<label>Password<br><input type=\"password\" id=\"password\" required minlength=\"6\" style=\"width:100%; padding:8px; margin:6px 0;\"></label>" +
+            "<button type=\"submit\" style=\"padding:10px 14px;\">Create account</button>" +
+            "</form>" +
+            "<p id=\"msg\" style=\"margin-top:12px;\"></p>" +
+            "<script>" +
+            "const form=document.getElementById('signup-form');" +
+            "const msg=document.getElementById('msg');" +
+            "form.addEventListener('submit', async (e)=>{" +
+            "e.preventDefault();" +
+            "msg.textContent='Creating account…';" +
+            "const email=document.getElementById('email').value.trim();" +
+            "const password=document.getElementById('password').value;" +
+            "const res=await fetch('/auth/signup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password})});" +
+            "const data=await res.json().catch(()=>({}));" +
+            "if(!res.ok){msg.textContent=data?.error||'Unable to create account';return;}" +
+            "msg.textContent='Account created. You can close this tab and log in from the extension.';" +
+            "});" +
+            "</script>" +
+            "</body></html>";
+          return new Response(html, {
+            status: 200,
+            headers: {
+              "Content-Type": "text/html; charset=utf-8",
+              ...corsHeaders(origin)
+            }
+          });
+        }
+        if (request.method !== "POST") {
+          return jsonResponse({ error: "Method not allowed" }, origin, 405);
+        }
+        let body = null;
+        try {
+          body = await request.json();
+        } catch {
+          body = null;
+        }
+        const email = (body?.email || "").toString().trim();
+        const password = (body?.password || "").toString();
+        if (!email || !password) {
+          return jsonResponse({ error: "Email and password required" }, origin, 400);
+        }
+        if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) {
+          return jsonResponse({ error: "Auth not configured" }, origin, 500);
+        }
+        const res = await fetch(`${env.SUPABASE_URL}/auth/v1/signup`, {
+          method: "POST",
+          headers: {
+            apikey: env.SUPABASE_ANON_KEY,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ email, password })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          return jsonResponse({ error: data?.msg || data?.error_description || "Signup failed" }, origin, 400);
+        }
+        return jsonResponse({ ok: true }, origin, 200);
+      }
+
+      if (url.pathname === "/auth/status") {
+        if (request.method !== "POST") {
+          return jsonResponse({ error: "Method not allowed" }, origin, 405);
+        }
+        const token = getAuthToken(request);
+        const user = await fetchSupabaseUser(token, env);
+        if (!user) return jsonResponse({ authenticated: false }, origin, 200);
+        const sub = await getSubscriptionRecord(user.id, env);
+        const validated = isSubscriptionActive(sub);
+        return jsonResponse(
+          {
+            authenticated: true,
+            validated,
+            user_id: user.id,
+            email: user.email || "unknown",
+            subscription_status: sub?.status || "unknown"
+          },
+          origin,
+          200
+        );
+      }
+
+      if (url.pathname === "/billing/checkout") {
+        const token = getAuthToken(request);
+        const user = token ? await fetchSupabaseUser(token, env) : null;
+
+        let email = "";
+        if (request.method === "GET") {
+          email = (url.searchParams.get("email") || "").toString().trim();
+        } else if (request.method === "POST") {
+          let payload = null;
+          try {
+            payload = await request.json();
+          } catch {
+            payload = null;
+          }
+          email = (payload?.email || "").toString().trim();
+        } else {
+          return jsonResponse({ error: "Method not allowed" }, origin, 405);
+        }
+
+        if (!env.STRIPE_PRICE_ID || !env.STRIPE_SUCCESS_URL || !env.STRIPE_CANCEL_URL) {
+          return jsonResponse({ error: "Billing not configured" }, origin, 500);
+        }
+
+        let resolvedUserId = user?.id || null;
+        if (!resolvedUserId && email) {
+          const emailUser = await findOrCreateSupabaseUserByEmail(email, env);
+          resolvedUserId = emailUser?.id || null;
+        }
+
+        const body = new URLSearchParams({
+          mode: "subscription",
+          "line_items[0][price]": env.STRIPE_PRICE_ID,
+          "line_items[0][quantity]": "1",
+          success_url: env.STRIPE_SUCCESS_URL,
+          cancel_url: env.STRIPE_CANCEL_URL,
+          ...(resolvedUserId ? { client_reference_id: resolvedUserId } : {}),
+          ...(user?.email || email ? { customer_email: user?.email || email } : {})
+        });
+        const sessionRes = await stripeRequest(env, "checkout/sessions", body);
+        if (!sessionRes?.ok) {
+          return jsonResponse(
+            { error: sessionRes?.error || "Unable to create checkout", stripe_status: sessionRes?.status },
+            origin,
+            502
+          );
+        }
+        const session = sessionRes.data;
+        if (!session?.url) return jsonResponse({ error: "Unable to create checkout" }, origin, 502);
+        if (request.method === "GET") {
+          return Response.redirect(session.url, 303);
+        }
+        return jsonResponse({ url: session.url }, origin, 200);
+      }
+
+      if (url.pathname === "/billing/portal") {
+        if (request.method !== "POST") {
+          return jsonResponse({ error: "Method not allowed" }, origin, 405);
+        }
+        const token = getAuthToken(request);
+        const user = await fetchSupabaseUser(token, env);
+        if (!user) return jsonResponse({ error: "Unauthorized" }, origin, 401);
+        const sub = await getSubscriptionRecord(user.id, env);
+        const customerId = sub?.stripe_customer_id;
+        if (!customerId || !env.STRIPE_SUCCESS_URL) {
+          return jsonResponse({ error: "Billing not configured" }, origin, 500);
+        }
+        const body = new URLSearchParams({
+          customer: customerId,
+          return_url: env.STRIPE_SUCCESS_URL
+        });
+        const sessionRes = await stripeRequest(env, "billing_portal/sessions", body);
+        if (!sessionRes?.ok) {
+          return jsonResponse(
+            { error: sessionRes?.error || "Unable to create portal session", stripe_status: sessionRes?.status },
+            origin,
+            502
+          );
+        }
+        const session = sessionRes.data;
+        if (!session?.url) return jsonResponse({ error: "Unable to create portal session" }, origin, 502);
+        return jsonResponse({ url: session.url }, origin, 200);
+      }
+
+      if (url.pathname !== "/analyze") {
+        return jsonResponse({ error: "Not found" }, origin, 404);
+      }
+
+      if (request.method !== "POST") {
+        return jsonResponse({ error: "Method not allowed" }, origin, 405);
+      }
+
+      let payload = null;
+      try {
+        payload = await request.json();
+      } catch {
+        return jsonResponse({ error: "Invalid JSON body" }, origin, 400);
+      }
+
+      const snapshot = {
+        url: payload?.url || null,
+        source_text: payload?.source_text || null,
+        year: payload?.year || null,
+        make: payload?.make || null,
+        model: payload?.model || null,
+        trim: payload?.trim || null,
+        trim_conflict: payload?.trim_conflict ?? null,
+        vehicle_type_hint: payload?.vehicle_type_hint || null,
+        drivetrain: payload?.drivetrain || null,
+        transmission: payload?.transmission || null,
+        engine: payload?.engine || null,
+        title_status: payload?.title_status || null,
+        owners: payload?.owners ?? null,
+        price_usd: payload?.price_usd ?? null,
+        mileage_miles: payload?.mileage_miles ?? null,
+        vin: payload?.vin || null,
+        seller_description: payload?.seller_description || null,
+        about_items: payload?.about_items || [],
+        provenance: payload?.provenance || null,
+        negotiation_points: payload?.negotiation_points || []
+      };
+
+      const authToken = getAuthToken(request);
+      const authUser = await fetchSupabaseUser(authToken, env);
+      const authSub = authUser ? await getSubscriptionRecord(authUser.id, env) : null;
+      const authValidated = isSubscriptionActive(authSub);
+
+      if (!snapshot.year || !snapshot.make) {
+        return jsonResponse({ error: "Missing required fields", required: ["year", "make"] }, origin, 400);
+      }
+
+      const requestId =
+        (typeof crypto?.randomUUID === "function" && crypto.randomUUID()) ||
+        `req_${Date.now()}_${Math.random().toString(16).slice(2, 10)}`;
+
+      const lifespanAnchors = buildLifespanAnchorsForPrompt(snapshot);
+
+      const canon = canonicalSnapshot(snapshot);
+      const snapshotKey = await hashString(JSON.stringify(canon));
+      const cacheKey = new Request(`https://cache.car-bot.local/analyze/${CACHE_VERSION}/${snapshotKey}`);
+      const cache = caches.default;
+
+      const cached = await cache.match(cacheKey);
+      if (cached) {
+        const withCors = new Response(cached.body, cached);
+        withCors.headers.set("Access-Control-Allow-Origin", origin || "*");
+        withCors.headers.set("X-Cache", "HIT");
+        withCors.headers.set("X-Dedupe", "CACHE_HIT");
+        withCors.headers.set("X-Request-Id", requestId);
+        withCors.headers.set("X-Snapshot-Key", snapshotKey.slice(0, 12));
+        return withCors;
+      }
+
+      return await dedupe(snapshotKey, async () => {
+        const cached2 = await cache.match(cacheKey);
+        if (cached2) {
+          const withCors = new Response(cached2.body, cached2);
+          withCors.headers.set("Access-Control-Allow-Origin", origin || "*");
+          withCors.headers.set("X-Cache", "HIT");
+          withCors.headers.set("X-Dedupe", "LOCK_HIT");
+          withCors.headers.set("X-Request-Id", requestId);
+          withCors.headers.set("X-Snapshot-Key", snapshotKey.slice(0, 12));
+          return withCors;
+        }
+
+        const ip = getClientIp(request);
+        const rate = checkRateLimit(ip);
+        if (!rate.ok) {
+          const retryAfter = Math.max(1, Math.ceil((rate.retryAfterMs || 0) / 1000));
+          return new Response(JSON.stringify({ error: "Rate limited", retry_after_seconds: retryAfter }), {
+            status: 429,
+            headers: {
+              "Content-Type": "application/json",
+              "Retry-After": String(retryAfter),
+              ...corsHeaders(origin),
+              "X-Request-Id": requestId,
+              "X-Snapshot-Key": snapshotKey.slice(0, 12),
+              "X-Dedupe": "LOCK_MISS"
+            }
+          });
+        }
+
+        if (!env.OPENAI_API_KEY) {
+          return jsonResponse({ error: "Server missing OPENAI_API_KEY" }, origin, 500);
+        }
+
+        const facts = {
+          year: snapshot.year,
+          make: snapshot.make,
+          model: snapshot.model,
+          trim: snapshot.trim,
+          price_usd: snapshot.price_usd,
+          mileage_miles: snapshot.mileage_miles,
+          drivetrain: snapshot.drivetrain,
+          transmission: snapshot.transmission,
+          title_status: snapshot.title_status,
+          seller_claims: snapshot.seller_description
+        };
+
+        // Prompt: keep focused on this listing and structured outputs
+        const userPrompt = [
+          "Evaluate this used car listing snapshot for a buyer.",
+          "Be specific. Do not contradict the canonical facts.",
+          "",
+          "Canonical facts (do not contradict):",
+          JSON.stringify(facts, null, 2),
+          "",
+          "Field requirements (follow exactly):",
+          "- summary: 2–4 sentences using listing facts.",
+          "- year_model_reputation: 1–3 sentences; if uncertain about platform specifics, say so.",
+          "- expected_maintenance_near_term: 3–6 items with cost ranges.",
+          "- common_issues: [] unless highly confident for this exact year/generation/powertrain.",
+          "- wear_items: 2–4 items; if seller claims new wear items, say 'verify receipt/date'.",
+          "- remaining_lifespan_estimate: exactly 3 lines (Best/Average/Worst), each with (assumption).",
+          "- risk_flags: 3–6; each includes subsystem + consequence + ($range or $unknown).",
+          "- buyer_questions: 4–7; each has (why it matters); at least 2 component-specific.",
+          "- deal_breakers: 3–6 concrete inspection/test-drive findings.",
+          "- tags: 3–6 short tags.",
+          "",
+          "Confidence rubric:",
+          "- 0.85–1.00 only if powertrain + title + records are clear.",
+          "- 0.65–0.84 if powertrain known but history unclear.",
+          "- 0.45–0.64 if powertrain or title is unknown.",
+          "- <=0.44 if >=250k miles or active symptoms.",
+          "",
+          "Snapshot JSON:",
+          JSON.stringify(snapshot, null, 2),
+          "",
+          "Lifespan anchors (calibration reference):",
+          JSON.stringify(lifespanAnchors, null, 2)
+        ].join("\n");
+
+        // Use JSON schema to improve structure reliability
+        const openaiRes = await fetch("https://api.openai.com/v1/responses", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${env.OPENAI_API_KEY}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            model: "gpt-4o-mini",
+            temperature: 0.15,
+            max_output_tokens: 1600,
+            text: {
+              format: {
+                type: "json_schema",
+                name: RESPONSE_SCHEMA.name,
+                schema: RESPONSE_SCHEMA.schema
+              }
+            },
+            input: [
+              { role: "system", content: [{ type: "input_text", text: SYSTEM_PROMPT }] },
+              { role: "user", content: [{ type: "input_text", text: userPrompt }] }
+            ]
+          })
+        });
+
+        const rawText = await openaiRes.text();
+        if (!openaiRes.ok) {
+          return jsonResponse({ error: "OpenAI error", status: openaiRes.status, details: rawText }, origin, 502);
+        }
+
+        let data = null;
+        try {
+          data = JSON.parse(rawText);
+        } catch {
+          return jsonResponse({ error: "OpenAI response not JSON", details: rawText.slice(0, 2000) }, origin, 502);
+        }
+
+        // Responses API: prefer output_text; else fallback to first text content
+        const content = data?.output?.[0]?.content || [];
+        const text =
+          data?.output_text ||
+          content.find((c) => c?.type === "output_text")?.text ||
+          content[0]?.text ||
+          "";
+
+        let parsed = null;
+        try {
+          parsed = JSON.parse(String(text));
+        } catch {
+          return jsonResponse({ error: "Failed to parse model response", raw: String(text).slice(0, 4000) }, origin, 502);
+        }
+
+        const final = coerceAndFill(parsed, snapshot);
+        const res = jsonResponse(final, origin, 200);
+        res.headers.set("X-Cache", "MISS");
+        res.headers.set("X-Dedupe", "LOCK_MISS");
+        res.headers.set("X-Request-Id", requestId);
+        res.headers.set("X-Snapshot-Key", snapshotKey.slice(0, 12));
+        res.headers.set("X-User-Validated", authValidated ? "true" : "false");
+        if (authUser?.id) res.headers.set("X-User-Id", authUser.id);
+
+        ctx?.waitUntil?.(cache.put(cacheKey, res.clone()));
+        return res;
+      });
+    } catch (err) {
+      return jsonResponse(
+        {
+          error: "Unhandled error",
+          details: err?.message || String(err || "unknown")
         },
-        input: [
-          { role: "system", content: [{ type: "input_text", text: SYSTEM_PROMPT }] },
-          { role: "user", content: [{ type: "input_text", text: userPrompt }] }
-        ]
-      })
-    });
-
-    const rawText = await openaiRes.text();
-    if (!openaiRes.ok) {
-      return jsonResponse({ error: "OpenAI error", status: openaiRes.status, details: rawText }, origin, 502);
+        origin,
+        500
+      );
     }
-
-    let data = null;
-    try {
-      data = JSON.parse(rawText);
-    } catch {
-      return jsonResponse({ error: "OpenAI response not JSON", details: rawText.slice(0, 2000) }, origin, 502);
-    }
-
-    // Responses API: prefer output_text; else fallback to first text content
-    const content = data?.output?.[0]?.content || [];
-    const text =
-      data?.output_text ||
-      content.find((c) => c?.type === "output_text")?.text ||
-      content[0]?.text ||
-      "";
-
-    let parsed = null;
-    try {
-      parsed = JSON.parse(String(text));
-    } catch {
-      return jsonResponse({ error: "Failed to parse model response", raw: String(text).slice(0, 4000) }, origin, 502);
-    }
-
-    const final = coerceAndFill(parsed, snapshot);
-    const res = jsonResponse(final, origin, 200);
-    res.headers.set("X-Cache", "MISS");
-
-    ctx?.waitUntil?.(cache.put(cacheKey, res.clone()));
-    return res;
   }
 };

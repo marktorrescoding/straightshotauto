@@ -1,5 +1,12 @@
 # Release Notes
 
+## 0.4.4 — 2026-02-21
+- Added password-based auth flow with a dedicated signup page.
+- Added Stripe success/cancel pages on the Worker domain.
+- Fixed subscription status handling to use Stripe subscription state.
+- Enforced free-analysis gating and auto-refresh after checkout.
+- Improved auth UI updates and access-state refresh behavior.
+
 ## 0.4.3 — 2026-01-23
 - Version bump to trigger automated Chrome Web Store publish.
 

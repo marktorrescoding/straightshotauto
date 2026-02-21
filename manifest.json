@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "StraightShot Auto",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "StraightShot Auto adds a vehicle snapshot and analysis overlay on Facebook Marketplace listings.",
   "icons": {
     "16": "assets/icon16.png",
@@ -28,6 +28,11 @@
       "matches": ["https://www.facebook.com/marketplace/*"],
       "js": ["src/utils.js", "src/extract.js", "src/overlay.js", "content.js"],
       "css": ["styles.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://car-bot.car-bot.workers.dev/auth/callback*"],
+      "js": ["auth-callback.js"],
       "run_at": "document_idle"
     }
   ]

@@ -11,7 +11,13 @@
     analysisSeq: 0,
     analysisReady: false,
     lastVehicle: null,
-    lastRenderKey: null
+    lastRenderKey: null,
+    authSession: null,
+    authValidated: false,
+    authMessage: "",
+    freeCount: 0,
+    lastFreeSnapshotKey: null,
+    analysisGated: false
   };
 
   window.FBCO_isVisible = function (el) {
@@ -83,6 +89,27 @@
       cur = cur.parentElement;
     }
     return false;
+  };
+
+  function normalizeListingId(url) {
+    if (!url) return "";
+    try {
+      const u = new URL(url);
+      const m = u.pathname.match(/\/marketplace\/item\/(\d+)/);
+      return m ? m[1] : u.pathname || "";
+    } catch {
+      return String(url);
+    }
+  }
+
+  window.FBCO_makeSnapshotKey = function (v) {
+    try {
+      return [normalizeListingId(v?.url), v?.year, v?.make, v?.model]
+        .map((x) => String(x ?? ""))
+        .join("|");
+    } catch {
+      return null;
+    }
   };
 
   window.FBCO_storage = {
