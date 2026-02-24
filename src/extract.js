@@ -232,6 +232,7 @@
   function parseDrivetrain(text) {
     if (!text) return null;
     const t = String(text).toLowerCase();
+    if (/\bfx4\b/.test(t)) return "4WD";
     if (/\b(2|two)\s*[-\s]?\s*wheel\s*[-\s]?\s*drive\b/.test(t)) return "2WD";
     if (/\b(4|four)\s*[-\s]?\s*wheel\s*[-\s]?\s*drive\b/.test(t)) return "4WD";
 
@@ -284,8 +285,25 @@
     return null;
   }
 
+  function parseEngine(text) {
+    if (!text) return null;
+    const t = String(text);
+    const l = t.toLowerCase();
+    if (/3\.5\s*(l|liter)?\s*eco\s*boost|3\.5\s*eb|3\.5l?\s*ecoboost/i.test(l)) return "3.5L EcoBoost";
+    if (/2\.7\s*(l|liter)?\s*eco\s*boost|2\.7l?\s*ecoboost/i.test(l)) return "2.7L EcoBoost";
+    if (/5\.0\s*(l|liter)?\s*(v8|coyote)?/i.test(l)) return "5.0L V8";
+    if (/3\.5\s*(l|liter)?\s*v6/i.test(l)) return "3.5L V6";
+    if (/3\.6\s*(l|liter)?\s*v6/i.test(l)) return "3.6L V6";
+    if (/2\.0\s*(l|liter)?\s*t|2\.0t/i.test(l)) return "2.0L Turbo";
+    const m = t.match(/\b(\d\.\d)\s*(l|liter)\b/i);
+    if (m) return `${m[1]}L`;
+    return null;
+  }
+
   function parsePaidOff(text) {
     if (!text) return null;
+    if (/\b(money|loan|financing)\s+(is\s+)?still\s+owed\b/i.test(text)) return false;
+    if (/\b(still owed|financing remaining|loan balance|payoff)\b/i.test(text)) return false;
     if (/not\s+paid\s+off/i.test(text)) return false;
     if (/paid\s+off/i.test(text)) return true;
     return null;
@@ -293,8 +311,32 @@
 
   function parseVin(text) {
     if (!text) return null;
-    const m = text.match(/\bVIN\b[:#]?\s*([A-HJ-NPR-Z0-9]{11,17})\b/i);
-    return m ? m[1] : null;
+    const labeled = text.match(/\bVIN\b[:#]?\s*([A-HJ-NPR-Z0-9]{17})\b/i);
+    if (labeled) return labeled[1].toUpperCase();
+    return null;
+  }
+
+  function parseVinFallback(text) {
+    if (!text) return null;
+    const all = String(text);
+    const matches = [...all.matchAll(/\b([A-HJ-NPR-Z0-9]{17})\b/g)];
+    if (!matches.length) return null;
+    for (const m of matches) {
+      const idx = m.index || 0;
+      const near = all.slice(Math.max(0, idx - 30), Math.min(all.length, idx + 30)).toLowerCase();
+      if (/\bvin\b|vehicle identification/.test(near)) return m[1].toUpperCase();
+    }
+    return matches[0][1].toUpperCase();
+  }
+
+  function getPageWideText() {
+    const parts = [];
+    if (document.title) parts.push(document.title);
+    const bodyText = document.body?.innerText || "";
+    if (bodyText) parts.push(bodyText);
+    const metaDesc = document.querySelector('meta[name="description"]')?.getAttribute("content");
+    if (metaDesc) parts.push(metaDesc);
+    return parts.join("\n");
   }
 
   function parseTitleStatus(text) {
@@ -507,7 +549,12 @@
       findSectionTextByHeading(/^Description$/i);
     const seller_description = normalizeSellerDescription(sellerText);
 
-    const vin = parseVin(sellerText) || parseVin(aboutText) || null;
+    const pageText = getPageWideText();
+    const vinFromSeller = parseVin(sellerText);
+    const vinFromAbout = parseVin(aboutText);
+    const vinFromRaw = parseVin(raw);
+    const vinFromPage = parseVin(pageText) || parseVinFallback(pageText);
+    const vin = vinFromSeller || vinFromAbout || vinFromRaw || vinFromPage || null;
     const titleFromSeller = parseTitleStatus(sellerText);
     const titleFromAbout = parseTitleStatus(aboutText);
     const titleFromRaw = parseTitleStatus(raw);
@@ -518,8 +565,12 @@
 
     const sellerDrivetrain = parseDrivetrain(sellerText);
     const sellerTransmission = parseTransmission(sellerText);
-    const descDrivetrain = about.drivetrain || sellerDrivetrain;
+    const sellerEngine = parseEngine(sellerText);
+    const titleDrivetrain = parseDrivetrain(raw);
+    const titleEngine = parseEngine(raw);
+    const descDrivetrain = about.drivetrain || sellerDrivetrain || titleDrivetrain;
     const descTransmission = about.transmission || sellerTransmission;
+    const descEngine = sellerEngine || titleEngine;
     const descFuel = about.fuel_type || parseFuelType(sellerText);
     const descColors = parseColors(sellerText);
     const descMpg = parseMpg(sellerText);
@@ -547,8 +598,25 @@
           : titleFromRaw
             ? "title"
             : null,
-      drivetrain_source: about.drivetrain ? "about_vehicle" : sellerDrivetrain ? "seller_description" : null,
+      drivetrain_source: about.drivetrain
+        ? "about_vehicle"
+        : sellerDrivetrain
+          ? "seller_description"
+          : titleDrivetrain
+            ? "title"
+            : null,
       transmission_source: about.transmission ? "about_vehicle" : sellerTransmission ? "seller_description" : null
+      ,
+      engine_source: sellerEngine ? "seller_description" : titleEngine ? "title" : null,
+      vin_source: vinFromSeller
+        ? "seller_description"
+        : vinFromAbout
+          ? "about_vehicle"
+          : vinFromRaw
+            ? "title"
+            : vinFromPage
+              ? "page_text"
+              : null
     };
 
     const negotiation_points = buildNegotiationPoints({
@@ -575,6 +643,7 @@
       is_vehicle: vehicleStatus,
       transmission: descTransmission || null,
       drivetrain: descDrivetrain || null,
+      engine: descEngine || null,
       fuel_type: descFuel || null,
       exterior_color: about.exterior_color || descColors.exterior_color || null,
       interior_color: about.interior_color || descColors.interior_color || null,

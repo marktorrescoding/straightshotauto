@@ -109,6 +109,7 @@
               <div class="fbco-title-name-row">
                 <div class="fbco-title-name">StraightShot Auto</div>
                 <span id="fbco-subscription-flag" class="fbco-status-flag fbco-status-unsubscribed">Not subscribed</span>
+                <button id="fbco-header-logout" class="fbco-header-logout" type="button">Sign out</button>
               </div>
               <div class="fbco-title-sub" id="fbco-title-sub">Used car snapshot</div>
             </div>
@@ -159,7 +160,7 @@
               <div class="fbco-section-label">Summary</div>
               <div id="fbco-summary" class="fbco-text">—</div>
             </div>
-            <div class="fbco-summary-block" id="fbco-verdict-block">
+            <div class="fbco-summary-block fbco-blurable" id="fbco-verdict-block">
               <div class="fbco-section-label">Final verdict</div>
               <div id="fbco-final-verdict" class="fbco-text">—</div>
             </div>
@@ -244,7 +245,7 @@
 
           <div class="fbco-accordion fbco-blurable" id="fbco-acc-upsides">
             <button class="fbco-accordion-toggle" type="button" data-target="fbco-upsides-body" aria-expanded="false">
-              <span>✅ Upsides</span>
+              <span>Upsides</span>
               <span class="fbco-accordion-icon">▾</span>
             </button>
             <div id="fbco-upsides-body" class="fbco-accordion-body" hidden>
@@ -254,7 +255,7 @@
 
           <div class="fbco-accordion fbco-blurable" id="fbco-acc-risk">
             <button class="fbco-accordion-toggle" type="button" data-target="fbco-risk-body" aria-expanded="false">
-              <span>⚠️ Risk flags</span>
+              <span>Risk flags</span>
               <span class="fbco-accordion-icon">▾</span>
             </button>
             <div id="fbco-risk-body" class="fbco-accordion-body" hidden>
@@ -264,7 +265,7 @@
 
           <div class="fbco-accordion fbco-blurable" id="fbco-acc-deal">
             <button class="fbco-accordion-toggle" type="button" data-target="fbco-deal-body" aria-expanded="false">
-              <span>🛑 Deal breakers</span>
+              <span>Deal breakers</span>
               <span class="fbco-accordion-icon">▾</span>
             </button>
             <div id="fbco-deal-body" class="fbco-accordion-body" hidden>
@@ -512,6 +513,7 @@
     const signupBtn = root.querySelector("#fbco-auth-signup");
     const subscribeBtn = root.querySelector("#fbco-auth-subscribe");
     const logoutBtn = root.querySelector("#fbco-auth-logout");
+    const headerLogoutBtn = root.querySelector("#fbco-header-logout");
 
     const onLogin = (e) => {
       e.stopPropagation();
@@ -552,6 +554,8 @@
     };
     logoutBtn?.addEventListener("click", onLogout);
     if (logoutBtn) cleanupFns.push(() => logoutBtn.removeEventListener("click", onLogout));
+    headerLogoutBtn?.addEventListener("click", onLogout);
+    if (headerLogoutBtn) cleanupFns.push(() => headerLogoutBtn.removeEventListener("click", onLogout));
 
     const accordionToggles = Array.from(root.querySelectorAll(".fbco-accordion-toggle"));
     accordionToggles.forEach((btn) => {
@@ -794,17 +798,24 @@
   </head>
   <body>
     ${clone.outerHTML}
-    <script>
-      window.addEventListener('load', function () {
-        setTimeout(function () { window.print(); }, 120);
-      });
-      window.addEventListener('afterprint', function () { window.close(); });
-    </script>
   </body>
 </html>`;
 
     const printWin = window.open("about:blank", "_blank", "width=1000,height=900");
     if (!printWin) return;
+    printWin.onload = () => {
+      setTimeout(() => {
+        try {
+          printWin.focus();
+          printWin.print();
+        } catch {}
+      }, 120);
+    };
+    printWin.onafterprint = () => {
+      try {
+        printWin.close();
+      } catch {}
+    };
     printWin.document.open();
     printWin.document.write(printableHtml);
     printWin.document.close();
@@ -835,6 +846,18 @@
     if (item.estimated_cost_diy) parts.push(`DIY: ${item.estimated_cost_diy}`);
     if (item.estimated_cost_shop) parts.push(`Shop: ${item.estimated_cost_shop}`);
     return parts.length ? parts.join(" • ") : null;
+  }
+
+  function sanitizeListText(text) {
+    if (text == null) return null;
+    return String(text)
+      .replace(/^[\s\-*•]+/, "")
+      .replace(/^[✅⚠️🛑❌👍💎🚀]+\s*/u, "")
+      .replace(
+        /^[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{200D}\u{1F1E6}-\u{1F1FF}]+\s*/u,
+        ""
+      )
+      .trim();
   }
 
   function setVisible(el, visible) {
@@ -898,7 +921,8 @@
     el.innerHTML = "";
     setVisible(opts?.wrapper, true);
     items.forEach((item) => {
-      const text = mapFn ? mapFn(item) : typeof item === "string" ? item : JSON.stringify(item);
+      const rawText = mapFn ? mapFn(item) : typeof item === "string" ? item : JSON.stringify(item);
+      const text = sanitizeListText(rawText);
       if (!text) return;
       const li = document.createElement("li");
       if (opts?.clickable) {
@@ -967,12 +991,12 @@
 
   function scoreLabel(score) {
     if (score == null) return null;
-    if (score < 15) return { label: "❌ No", tone: "no" };
-    if (score < 35) return { label: "⚠️ Risky", tone: "risky" };
-    if (score < 55) return { label: "⚖️ Fair", tone: "fair" };
-    if (score < 72) return { label: "👍 Good", tone: "good" };
-    if (score < 88) return { label: "💎 Great", tone: "great" };
-    return { label: "🚀 Steal", tone: "steal" };
+    if (score < 15) return { label: "No", tone: "no" };
+    if (score < 35) return { label: "Risky", tone: "risky" };
+    if (score < 55) return { label: "Fair", tone: "fair" };
+    if (score < 80) return { label: "Good", tone: "good" };
+    if (score < 92) return { label: "Great", tone: "great" };
+    return { label: "Steal", tone: "steal" };
   }
 
   window.FBCO_updateOverlay = function (vehicle, analysisState) {
@@ -1090,6 +1114,7 @@
     const authSignupBtn = document.getElementById("fbco-auth-signup");
     const authSubscribeBtn = document.getElementById("fbco-auth-subscribe");
     const authLogoutBtn = document.getElementById("fbco-auth-logout");
+    const headerLogoutBtn = document.getElementById("fbco-header-logout");
 
     const accOverview = document.getElementById("fbco-acc-overview");
     const accUpsides = document.getElementById("fbco-acc-upsides");
@@ -1150,7 +1175,7 @@
     const accessCard = document.getElementById("fbco-access-card");
     const isAuthed = Boolean(access?.authenticated);
     const isValidated = Boolean(access?.validated);
-    setVisible(accessCard, Boolean(gated || !isValidated || isAuthed));
+    setVisible(accessCard, Boolean(gated || !isValidated));
 
     if (authMessageEl) {
       const msg = access?.message || window.FBCO_STATE?.authMessage || "";
@@ -1205,6 +1230,10 @@
     if (authLogoutBtn) {
       setVisible(authLogoutBtn, isAuthed);
       authLogoutBtn.disabled = !isAuthed;
+    }
+    if (headerLogoutBtn) {
+      setVisible(headerLogoutBtn, isAuthed);
+      headerLogoutBtn.disabled = !isAuthed;
     }
 
     root.dataset.loading = busy ? "1" : "0";
@@ -1276,10 +1305,20 @@
     renderList(issuesEl, data?.common_issues, stringifyIssue, { wrapper: accCommon });
     renderList(wearEl, data?.wear_items, stringifyMaintenance, { wrapper: accWear });
     renderList(checklistEl, data?.inspection_checklist, null, { wrapper: accInspection });
-    const mergedQuestions = [
+    const mergedQuestionsRaw = [
       ...((vehicleData?.negotiation_points || []).slice(0, 6)),
       ...((data?.buyer_questions || []).slice(0, 12))
     ];
+    const mergedQuestions = [];
+    const seenQuestions = new Set();
+    mergedQuestionsRaw.forEach((q) => {
+      const t = sanitizeListText(q);
+      if (!t) return;
+      const key = t.toLowerCase().replace(/\s+/g, " ").trim();
+      if (seenQuestions.has(key)) return;
+      seenQuestions.add(key);
+      mergedQuestions.push(t);
+    });
     renderList(questionsEl, mergedQuestions, null, { clickable: true, wrapper: accQuestions });
     renderList(dealBreakersEl, data?.deal_breakers, null, { wrapper: accDeal });
     renderList(risksEl, data?.risk_flags, null, { wrapper: accRisk });
@@ -1314,34 +1353,27 @@
       } else {
         const clamped = Math.min(100, Math.max(0, score));
         const meta = scoreLabel(clamped);
-        scoreBadgeEl.textContent = meta ? `${meta.label} (${clamped})` : `${clamped}/100`;
+        scoreBadgeEl.textContent = `Score ${clamped}`;
         scoreBadgeEl.className = `fbco-badge fbco-badge-${meta?.tone || "muted"}`;
       }
     }
 
     const conf = Number.isFinite(confValue) ? Math.round(confValue * 100) : null;
     if (confidenceBadgeEl) {
-      confidenceBadgeEl.textContent = conf == null ? "Confidence --" : `Confidence ${conf}%`;
+      confidenceBadgeEl.textContent = conf == null ? "Listing evidence --" : `Listing evidence ${conf}%`;
     }
 
     if (verdictBadgeEl) {
       const verdictText = typeof data?.final_verdict === "string" ? data.final_verdict.toLowerCase() : "";
-      if (verdictText.includes("conditional")) {
-        verdictBadgeEl.textContent = "Conditional buy";
-        verdictBadgeEl.className = "fbco-badge fbco-badge-fair";
-      } else if (verdictText.includes("avoid") || verdictText.includes("walk away")) {
+      if (verdictText.includes("avoid") || verdictText.includes("walk away") || verdictText.includes("high risk")) {
         verdictBadgeEl.textContent = "Avoid";
         verdictBadgeEl.className = "fbco-badge fbco-badge-no";
+      } else if (verdictText.includes("conditional") || /(caution|careful|verify|inspection)/i.test(verdictText)) {
+        verdictBadgeEl.textContent = "Conditional buy";
+        verdictBadgeEl.className = "fbco-badge fbco-badge-fair";
       } else if (verdictText.includes("buy")) {
         verdictBadgeEl.textContent = "Buy";
         verdictBadgeEl.className = "fbco-badge fbco-badge-good";
-      } else if (/(caution|careful|verify|inspection)/i.test(verdictText)) {
-        verdictBadgeEl.textContent = "Fair";
-        verdictBadgeEl.className = "fbco-badge fbco-badge-fair";
-      } else if (score != null) {
-        const meta = scoreLabel(score);
-        verdictBadgeEl.textContent = meta?.label || "Verdict";
-        verdictBadgeEl.className = `fbco-badge fbco-badge-${meta?.tone || "muted"}`;
       } else {
         verdictBadgeEl.textContent = "Verdict";
         verdictBadgeEl.className = "fbco-badge fbco-badge-muted";

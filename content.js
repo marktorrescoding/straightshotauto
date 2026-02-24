@@ -11,7 +11,7 @@
   const SUPABASE_URL = "https://uluvqqypgdpsxzutojdd.supabase.co";
   const SUPABASE_ANON_KEY =
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVsdXZxcXlwZ2Rwc3h6dXRvamRkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAwNzY1MDgsImV4cCI6MjA4NTY1MjUwOH0.m49_Y868P0Vpw5vT3SuDDEXbsSN3VT80CMhPWP1HCH8";
-  const FREE_LIMIT = 1;
+  const FREE_LIMIT = 5;
   const AUTH_STORAGE_KEY = "fbco.auth.session.v1";
   const AUTH_EMAIL_KEY = "fbco.auth.email.v1";
   const FREE_COUNT_KEY = "fbco.free.count.v1";
@@ -66,12 +66,14 @@
 
   function buildAccessInfo(state) {
     const freeCount = loadFreeCount();
+    const storedSession = loadAuthSession();
+    const activeSession = state?.authSession?.access_token ? state.authSession : storedSession;
     return {
-      authenticated: Boolean(state?.authSession?.access_token),
+      authenticated: Boolean(activeSession?.access_token),
       validated: Boolean(state?.authValidated),
       freeCount,
       freeRemaining: Math.max(0, FREE_LIMIT - freeCount),
-      email: state?.authSession?.user?.email || "",
+      email: activeSession?.user?.email || "",
       message: state?.authMessage || "",
       authMode: AUTH_MODE,
       lastEmail: window.FBCO_storage.get(AUTH_EMAIL_KEY, "")
@@ -131,7 +133,11 @@
           chrome.storage.local.get([AUTH_STORAGE_KEY, AUTH_EMAIL_KEY], (res) => resolve(res || {}));
         });
         if (Object.prototype.hasOwnProperty.call(data, AUTH_STORAGE_KEY)) {
-          window.FBCO_storage.set(AUTH_STORAGE_KEY, data[AUTH_STORAGE_KEY] ?? null);
+          const hydrated = normalizeAuthSession(data[AUTH_STORAGE_KEY], loadAuthSession());
+          window.FBCO_storage.set(AUTH_STORAGE_KEY, hydrated);
+          if (window.FBCO_STATE && hydrated?.access_token) {
+            window.FBCO_STATE.authSession = hydrated;
+          }
         }
         if (Object.prototype.hasOwnProperty.call(data, AUTH_EMAIL_KEY)) {
           window.FBCO_storage.set(AUTH_EMAIL_KEY, data[AUTH_EMAIL_KEY] ?? "");
@@ -432,6 +438,7 @@
         mileage_miles: vehicle.mileage_miles,
         transmission: vehicle.transmission,
         drivetrain: vehicle.drivetrain,
+        engine: vehicle.engine,
         fuel_type: vehicle.fuel_type,
         exterior_color: vehicle.exterior_color,
         interior_color: vehicle.interior_color,

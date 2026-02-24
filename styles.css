@@ -115,6 +115,20 @@
   border-color: #ffe58f;
 }
 
+#fb-car-overlay-mvp .fbco-header-logout {
+  display: none;
+  border: 1px solid rgba(0,0,0,0.1);
+  background: #fff;
+  color: rgba(0,0,0,0.75);
+  border-radius: 999px;
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
 #fb-car-overlay-mvp .fbco-title-sub {
   display: none;
   color: rgba(0,0,0,0.5);
