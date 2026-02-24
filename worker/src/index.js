@@ -18,7 +18,8 @@ const SYSTEM_PROMPT =
   ].join("\n");
 
 const CACHE_TTL_SECONDS = 60 * 60 * 24;
-const CACHE_VERSION = "v7"; // bumped because lifespan output is now model-driven with anchors
+const CACHE_VERSION = "v12"; // bump to invalidate stale cached analyses after deal-context scoring changes
+const FREE_DAILY_LIMIT = 5;
 const RATE_MIN_INTERVAL_MS = 0;
 const RATE_WINDOW_MS = 60 * 60 * 1000;
 const RATE_MAX_REQUESTS = 120;
@@ -102,6 +103,85 @@ function checkRateLimit(ip) {
   return { ok: true };
 }
 
+function utcDayStampNow() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function parseFreeUsageRecord(raw) {
+  if (!raw) return { count: 0, seen_snapshot_keys: [] };
+  try {
+    const parsed = JSON.parse(raw);
+    const count = Number.isFinite(Number(parsed?.count)) ? Math.max(0, Number(parsed.count)) : 0;
+    const seen = Array.isArray(parsed?.seen_snapshot_keys)
+      ? parsed.seen_snapshot_keys.map((x) => String(x || "")).filter(Boolean).slice(0, 100)
+      : [];
+    return { count, seen_snapshot_keys: seen };
+  } catch {
+    return { count: 0, seen_snapshot_keys: [] };
+  }
+}
+
+async function consumeFreeAnalysisSlot(request, cache, snapshotKey) {
+  const ip = getClientIp(request);
+  const ua = (request.headers.get("User-Agent") || "").slice(0, 180);
+  const bucketSource = `${utcDayStampNow()}|${ip}|${ua}`;
+  const bucketHash = await hashString(bucketSource);
+  const usageReq = new Request(`https://quota.car-bot.local/free/${bucketHash}`);
+
+  const existing = await cache.match(usageReq);
+  const record = parseFreeUsageRecord(existing ? await existing.text() : "");
+
+  if (record.seen_snapshot_keys.includes(snapshotKey)) {
+    return { ok: true, remaining: Math.max(0, FREE_DAILY_LIMIT - record.count), count: record.count };
+  }
+
+  if (record.count >= FREE_DAILY_LIMIT) {
+    return { ok: false, remaining: 0, count: record.count };
+  }
+
+  const nextCount = record.count + 1;
+  const seenSet = new Set(record.seen_snapshot_keys);
+  seenSet.add(snapshotKey);
+  const nextRecord = {
+    count: nextCount,
+    seen_snapshot_keys: Array.from(seenSet).slice(-100)
+  };
+
+  await cache.put(
+    usageReq,
+    new Response(JSON.stringify(nextRecord), {
+      headers: {
+        "Content-Type": "application/json",
+        "Cache-Control": "public, max-age=172800"
+      }
+    })
+  );
+
+  return { ok: true, remaining: Math.max(0, FREE_DAILY_LIMIT - nextCount), count: nextCount };
+}
+
+function freeLimitResponse(origin, requestId, snapshotKey) {
+  return new Response(
+    JSON.stringify({
+      error: "Free limit reached. Log in or subscribe to continue.",
+      code: "free_limit_reached",
+      free_limit: FREE_DAILY_LIMIT,
+      free_remaining: 0
+    }),
+    {
+      status: 402,
+      headers: {
+        "Content-Type": "application/json",
+        ...corsHeaders(origin),
+        "X-Request-Id": requestId,
+        "X-Snapshot-Key": snapshotKey.slice(0, 12),
+        "X-User-Validated": "false",
+        "X-Free-Remaining": "0"
+      }
+    }
+  );
+}
+
 async function hashString(input) {
   const data = new TextEncoder().encode(input);
   const hashBuffer = await crypto.subtle.digest("SHA-256", data);
@@ -168,6 +248,17 @@ function asArray(v) {
   return Array.isArray(v) ? v : [];
 }
 
+function stripLeadingDecorators(text) {
+  const s = asString(text, "");
+  return s
+    .replace(/^[\s\-*•]+/, "")
+    .replace(
+      /^[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{200D}\u{1F1E6}-\u{1F1FF}]+\s*/u,
+      ""
+    )
+    .trim();
+}
+
 function verdictFromScore(score) {
   if (!Number.isFinite(score)) return "unknown";
   if (score <= 14) return "❌ No";
@@ -178,8 +269,280 @@ function verdictFromScore(score) {
   return "🚀 Steal";
 }
 
+function letterGradeFromScore(score) {
+  if (!Number.isFinite(score)) return "N/A";
+  if (score >= 92) return "A+";
+  if (score >= 88) return "A";
+  if (score >= 84) return "A-";
+  if (score >= 79) return "B+";
+  if (score >= 75) return "B";
+  if (score >= 72) return "B-";
+  if (score >= 65) return "C+";
+  if (score >= 60) return "C";
+  if (score >= 55) return "C-";
+  if (score >= 45) return "D+";
+  if (score >= 40) return "D";
+  if (score >= 35) return "D-";
+  return "F";
+}
+
+function riskLevelFromScore(score) {
+  if (!Number.isFinite(score)) return "Unknown";
+  if (score <= 25) return "Very high";
+  if (score <= 45) return "High";
+  if (score <= 65) return "Moderate";
+  if (score <= 80) return "Low to moderate";
+  return "Low";
+}
+
 function normalizeText(value) {
   return (value || "").toString().toLowerCase();
+}
+
+function semanticTopicKey(text) {
+  const t = normalizeText(text).replace(/\s+/g, " ").trim();
+  if (!t) return "";
+  if (/\bvin\b|\bhistory check\b/.test(t)) return "vin_history";
+  if (/\btitle\b|\blien\b|\bsalvage\b|\brebuilt\b/.test(t)) return "title_status";
+  if (/\bdrivetrain\b|\b2wd\b|\b4wd\b|\b4x4\b|\bawd\b|\bfwd\b|\brwd\b|\b4hi\b|\b4lo\b/.test(t)) return "drivetrain";
+  if (/\btransmission\b|\bcvt\b|\btrans fluid\b/.test(t)) return "transmission";
+  if (/\bengine\b|\boil leak\b|\bwarm idle\b/.test(t)) return "engine_health";
+  if (/\becoboost\b|\bcam phaser\b|\btiming chain\b|\bturbo\b|\bboost leak\b|\bintercooler\b/.test(t)) {
+    return "forced_induction";
+  }
+  if (/\blevel\b|\blift\b|\b33\b|\b35\b|\bcv axle\b|\bball joint\b|\bwheel bearing\b|\balignment\b/.test(t)) {
+    return "suspension_mods";
+  }
+  if (/\bcanopy\b|\btopper\b|\bbed rail\b|\bwater leak\b/.test(t)) return "canopy_fitment";
+  if (/\bled\b|\blight bar\b|\bwiring\b|\bfuse\b|\brelay\b/.test(t)) return "electrical_mods";
+  if (/\brecords?\b|\bservice history\b|\breceipts?\b|\bmaintenance history\b/.test(t)) return "service_records";
+  if (/\bmileage\b|\bhigh mileage\b/.test(t)) return "high_mileage";
+  return t
+    .replace(/\(\$[^)]*\)/g, "")
+    .replace(/\(\s*[^)]*why[^)]*\)/g, "")
+    .replace(/[^\w\s]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function dedupeBySemanticTopic(items, max = 7) {
+  const seen = new Set();
+  const out = [];
+  for (const raw of asArray(items)) {
+    const item = asString(raw, "");
+    if (!item) continue;
+    const key = semanticTopicKey(item);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+function sourceBlob(snapshot) {
+  return normalizeText([snapshot?.source_text, snapshot?.seller_description, ...(snapshot?.about_items || [])].join(" "));
+}
+
+function inferredDrivetrain(snapshot) {
+  if (snapshot?.drivetrain) return snapshot.drivetrain;
+  const t = sourceBlob(snapshot);
+  const make = normalizeText(snapshot?.make);
+  const model = normalizeText(snapshot?.model);
+  if (/\bfx4\b/.test(t)) return "4WD";
+  if (/\b4x4\b|\b4wd\b/.test(t)) return "4WD";
+  if (/\bawd\b/.test(t)) return "AWD";
+  if (/\bfwd\b/.test(t)) return "FWD";
+  if (/\brwd\b/.test(t)) return "RWD";
+  if (/\b2wd\b/.test(t)) return "2WD";
+  if (make === "lexus" && /\bgx\b/.test(model)) return "4WD (inferred)";
+  return null;
+}
+
+function inferredTransmission(snapshot) {
+  if (snapshot?.transmission) return snapshot.transmission;
+  const t = sourceBlob(snapshot);
+  if (/\bautomatic\b/.test(t)) return "Automatic";
+  if (/\bmanual\b/.test(t)) return "Manual";
+  if (/\bcvt\b/.test(t)) return "CVT";
+  return null;
+}
+
+function inferredEngine(snapshot) {
+  if (snapshot?.engine) return snapshot.engine;
+  const t = sourceBlob(snapshot);
+  if (/3\.5\s*(l|liter)?\s*eco\s*boost|3\.5\s*eb|3\.5l?\s*ecoboost/.test(t)) return "3.5L EcoBoost";
+  if (/2\.7\s*(l|liter)?\s*eco\s*boost|2\.7l?\s*ecoboost/.test(t)) return "2.7L EcoBoost";
+  if (/5\.0\s*(l|liter)?\s*(v8|coyote)?/.test(t)) return "5.0L V8";
+  if (/3\.5\s*(l|liter)?\s*v6/.test(t)) return "3.5L V6";
+  return null;
+}
+
+function sourceConfidence(source, hasValue) {
+  if (!hasValue) return 0;
+  if (source === "about_vehicle") return 0.95;
+  if (source === "title") return 0.88;
+  if (source === "seller_description") return 0.8;
+  if (source === "derived") return 0.68;
+  return 0.75;
+}
+
+function excerptAround(text, pattern, radius = 55) {
+  if (!text || !pattern) return null;
+  const m = String(text).match(pattern);
+  if (!m || m.index == null) return null;
+  const start = Math.max(0, m.index - radius);
+  const end = Math.min(String(text).length, m.index + m[0].length + radius);
+  return String(text)
+    .slice(start, end)
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function detectOwnerCountClaim(snapshot) {
+  const text = sourceBlob(snapshot);
+  const m = text.match(/\b(\d{1,2})\s*owner(s)?\b/i);
+  return m ? Number(m[1]) : null;
+}
+
+function detectAccidentClaim(snapshot) {
+  const text = sourceBlob(snapshot);
+  if (/\bno accidents?\b/i.test(text)) return "no_accidents_claimed";
+  if (/\baccident(s)?\b/i.test(text)) return "accident_mentioned";
+  return null;
+}
+
+function detectRecordsClaim(snapshot) {
+  return hasServiceRecordsClaim(snapshot) ? "records_claimed" : null;
+}
+
+function detectModificationSignals(snapshot) {
+  const text = sourceBlob(snapshot);
+  const patterns = [
+    { key: "lift_or_level", re: /(level(\s|-)?kit|lift|rough country|coilover)/i },
+    { key: "oversized_tires", re: /\b33("|”|in(ch)?)?\b|\b35("|”|in(ch)?)?\b/i },
+    { key: "aftermarket_wheels", re: /(aftermarket wheels|krank wheels|fuel wheels)/i },
+    { key: "canopy_or_topper", re: /(are\s+canopy|canopy|camper shell|topper)/i },
+    { key: "intake_or_spacer", re: /(cold air intake|throttle body spacer)/i },
+    { key: "drivetrain_mod", re: /(extended cv|yukon rear end|re-?gear)/i }
+  ];
+  return patterns.filter((p) => p.re.test(text)).map((p) => p.key);
+}
+
+function buildNormalizedFacts(snapshot) {
+  const textBlob = [snapshot?.source_text, snapshot?.seller_description, ...(snapshot?.about_items || [])]
+    .filter(Boolean)
+    .join("\n");
+
+  const drive = inferredDrivetrain(snapshot);
+  const trans = inferredTransmission(snapshot);
+  const engine = inferredEngine(snapshot);
+  const ownerCount = detectOwnerCountClaim(snapshot);
+  const accidentClaim = detectAccidentClaim(snapshot);
+  const recordsClaim = detectRecordsClaim(snapshot);
+  const modSignals = detectModificationSignals(snapshot);
+
+  const fact = (value, source, evidencePattern = null, explicitEvidence = null) => {
+    const hasValue = hasKnownValue(value);
+    return {
+      value: hasValue ? value : null,
+      source: hasValue ? source || "derived" : null,
+      confidence: sourceConfidence(source || "derived", hasValue),
+      evidence: hasValue ? explicitEvidence || excerptAround(textBlob, evidencePattern) || null : null
+    };
+  };
+
+  const drivelineSource =
+    snapshot?.provenance?.drivetrain_source || (drive && !snapshot?.drivetrain ? "derived" : null);
+  const transSource =
+    snapshot?.provenance?.transmission_source || (trans && !snapshot?.transmission ? "derived" : null);
+  const titleSource = snapshot?.provenance?.title_status_source || null;
+
+  return {
+    year: fact(snapshot?.year, "title", /\b(19|20)\d{2}\b/i),
+    make: fact(snapshot?.make, "title", /\b[a-z0-9-]+\b/i),
+    model: fact(snapshot?.model, "title"),
+    trim: fact(snapshot?.trim, "title"),
+    price_usd: fact(snapshot?.price_usd, "title", /\$\s?\d[\d,]*/i, snapshot?.price_usd ? formatUsdWhole(snapshot.price_usd) : null),
+    mileage_miles: fact(
+      snapshot?.mileage_miles,
+      "title",
+      /\b\d{1,3}(,\d{3})+\s*(miles|mi)\b/i,
+      snapshot?.mileage_miles ? `${Number(snapshot.mileage_miles).toLocaleString("en-US")} miles` : null
+    ),
+    transmission: fact(trans, transSource, /\b(automatic|manual|cvt)\b/i),
+    drivetrain: fact(drive, drivelineSource, /\b(awd|4wd|4x4|fwd|rwd|2wd|fx4)\b/i),
+    engine: fact(engine, snapshot?.provenance?.engine_source || (engine && !snapshot?.engine ? "derived" : null), /\b(\d\.\d\s*(l|liter).{0,20}(ecoboost|v6|v8)|ecoboost)\b/i),
+    fuel_type: fact(snapshot?.fuel_type, "about_vehicle", /\bfuel type:\s*[a-z]+/i),
+    title_status: fact(snapshot?.title_status, titleSource, /\b(clean title|salvage|rebuilt|lien|title)\b/i),
+    vin: fact(snapshot?.vin, "seller_description", /\bvin\b[:#]?\s*[a-hj-npr-z0-9]{11,17}\b/i),
+    owner_count_claimed: fact(ownerCount, "seller_description", /\b\d+\s*owner(s)?\b/i),
+    accident_claimed: fact(accidentClaim, "seller_description", /\b(no accidents?|accident)\b/i),
+    records_claimed: fact(recordsClaim, recordsClaim ? "seller_description" : null, /(service records|maintenance records|ford pass)/i),
+    modifications_detected: fact(modSignals, modSignals.length ? "derived" : null)
+  };
+}
+
+function computeEvidenceCoverage(snapshot) {
+  const drive = inferredDrivetrain(snapshot);
+  const trans = inferredTransmission(snapshot);
+  const engine = inferredEngine(snapshot);
+  const records = detectRecordsClaim(snapshot);
+  const hasAbout = Array.isArray(snapshot?.about_items) && snapshot.about_items.length > 0;
+
+  const weights = [
+    { ok: hasKnownValue(snapshot?.year) && hasKnownValue(snapshot?.make) && hasKnownValue(snapshot?.model), w: 0.16 },
+    { ok: hasKnownValue(snapshot?.price_usd), w: 0.1 },
+    { ok: hasKnownValue(snapshot?.mileage_miles), w: 0.1 },
+    { ok: hasKnownValue(trans), w: 0.08 },
+    { ok: hasKnownValue(drive), w: 0.08 },
+    { ok: hasKnownValue(engine), w: 0.07 },
+    { ok: hasKnownValue(snapshot?.title_status), w: 0.1 },
+    { ok: hasKnownValue(snapshot?.vin), w: 0.1 },
+    { ok: hasKnownValue(snapshot?.seller_description), w: 0.08 },
+    { ok: hasAbout, w: 0.05 },
+    { ok: hasKnownValue(snapshot?.fuel_type), w: 0.04 },
+    { ok: hasKnownValue(snapshot?.nhtsa_rating) || hasKnownValue(snapshot?.mpg_city), w: 0.02 },
+    { ok: Boolean(records), w: 0.02 }
+  ];
+
+  let score = 0;
+  weights.forEach((x) => {
+    if (x.ok) score += x.w;
+  });
+  return clamp(score, 0.2, 0.98);
+}
+
+function computeHeuristicDecisionScore(snapshot, out) {
+  let score = 68;
+  const miles = asNumber(snapshot?.mileage_miles, null);
+  const title = deriveTitleStatus(snapshot);
+  const hasVin = hasKnownValue(snapshot?.vin);
+  const hasRecords = Boolean(detectRecordsClaim(snapshot));
+  const drive = inferredDrivetrain(snapshot);
+  const modified = hasHeavyModificationSignals(snapshot);
+
+  if (Number.isFinite(miles)) {
+    if (miles >= 250000) score -= 20;
+    else if (miles >= 200000) score -= 15;
+    else if (miles >= 160000) score -= 8;
+    else if (miles >= 120000) score -= 6;
+    else if (miles <= 60000) score += 6;
+  } else {
+    score -= 4;
+  }
+
+  if (title === "unknown") score -= 6;
+  if (title === "no_title") score -= 35;
+  if (title === "lien") score -= 8;
+  if (title === "rebuilt") score -= 18;
+  if (title === "clean") score += 2;
+  if (!hasVin) score -= 2;
+  if (!drive) score -= 2;
+  if (hasRecords) score += 4;
+  if (modified) score -= 3;
+
+  return clamp(Math.round(score), 0, 100);
 }
 
 function getAuthToken(request) {
@@ -358,8 +721,20 @@ async function verifyStripeSignature(payload, signatureHeader, secret) {
 }
 
 function deriveTitleStatus(snapshot) {
-  const explicit = snapshot?.title_status;
-  if (explicit) return normalizeText(explicit);
+  const explicit = normalizeText(snapshot?.title_status);
+  const text = sourceBlob(snapshot);
+  if (explicit) {
+    if (explicit.includes("no_title")) return "no_title";
+    if (explicit.includes("clean")) return "clean";
+    if (explicit.includes("salvage")) return "salvage";
+    if (explicit.includes("rebuilt") || explicit.includes("rebuild")) return "rebuilt";
+    if (explicit.includes("lien")) return "lien";
+    if (explicit.includes("unknown")) return "unknown";
+    return explicit;
+  }
+  if (/\b(no title|without title|missing title|lost title|cant get title|can'?t get title)\b/i.test(text)) {
+    return "no_title";
+  }
   return "unknown";
 }
 
@@ -371,6 +746,95 @@ function hasServiceRecordsClaim(snapshot) {
 function scrubCleanTitle(text) {
   if (!text) return text;
   return text.replace(/clean title/gi, "title status not stated");
+}
+
+function hasKnownValue(value) {
+  if (value == null) return false;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value === "string") return value.trim().length > 0;
+  if (Array.isArray(value)) return value.length > 0;
+  return Boolean(value);
+}
+
+function splitSentences(text) {
+  if (!text || typeof text !== "string") return [];
+  return text
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function removeFalseMissingClaims(text, checks) {
+  const sentences = splitSentences(text);
+  if (!sentences.length) return text || "";
+  const kept = sentences.filter((s) => !checks.some((check) => check.when && check.pattern.test(s)));
+  return kept.join(" ").trim();
+}
+
+function enforceFactConsistency(out, snapshot) {
+  const hasPrice = hasKnownValue(snapshot?.price_usd);
+  const hasMileage = hasKnownValue(snapshot?.mileage_miles);
+  const hasDrivetrain = hasKnownValue(snapshot?.drivetrain);
+  const hasTransmission = hasKnownValue(snapshot?.transmission);
+  const hasEngine = hasKnownValue(inferredEngine(snapshot));
+  const hasSellerDescription = hasKnownValue(snapshot?.seller_description);
+  const hasRecords = Boolean(detectRecordsClaim(snapshot));
+
+  const checks = [
+    {
+      when: hasPrice,
+      pattern: /(price|asking price).*(missing|not provided|not listed|unknown|not mentioned)|missing listing info:.*price/i
+    },
+    {
+      when: hasMileage,
+      pattern:
+        /(mileage|miles).*(missing|not provided|not listed|unknown|not mentioned)|missing listing info:.*mileage/i
+    },
+    {
+      when: hasDrivetrain,
+      pattern:
+        /(drivetrain|2wd|4wd|awd|fwd).*(missing|not provided|unknown|not mentioned)|missing listing info:.*drivetrain/i
+    },
+    {
+      when: hasTransmission,
+      pattern:
+        /(transmission|automatic|manual|cvt).*(missing|not provided|unknown|not mentioned)|missing listing info:.*transmission/i
+    },
+    {
+      when: hasEngine,
+      pattern: /(engine|motor|powertrain).*(missing|not provided|unknown|not mentioned)|missing listing info:.*engine/i
+    },
+    {
+      when: hasSellerDescription,
+      pattern: /(seller description|seller notes|description).*(missing|not provided|unknown)|missing listing info:.*seller_description/i
+    },
+    {
+      when: hasRecords,
+      pattern: /(lack of detailed service history|maintenance history unknown|no maintenance records)/i
+    }
+  ];
+
+  out.summary = removeFalseMissingClaims(out.summary, checks);
+  out.notes = removeFalseMissingClaims(out.notes, checks);
+
+  out.risk_flags = (out.risk_flags || []).filter((flag) => {
+    const s = String(flag || "");
+    if (hasPrice && /(no|unknown|missing).*(price|asking)/i.test(s)) return false;
+    if (hasMileage && /(no|unknown|missing).*(mileage|miles)/i.test(s)) return false;
+    if (hasDrivetrain && /(unknown|missing).*(drivetrain|2wd|4wd|awd|fwd)/i.test(s)) return false;
+    if (hasTransmission && /(unknown|missing).*(transmission|automatic|manual|cvt)/i.test(s)) return false;
+    if (hasEngine && /(unknown|missing).*(engine|motor|powertrain)/i.test(s)) return false;
+    if (hasRecords && /(lack of .*service history|maintenance records unknown|no maintenance records)/i.test(s)) return false;
+    return true;
+  });
+
+  out.buyer_questions = (out.buyer_questions || []).filter((q) => {
+    const s = normalizeText(q);
+    if (hasDrivetrain && /what is the drivetrain|is it 2wd or 4wd\?/i.test(s)) return false;
+    if (hasTransmission && /which transmission|what transmission/i.test(s)) return false;
+    if (hasEngine && /which .*engine|what .*engine/i.test(s)) return false;
+    return true;
+  });
 }
 
 function ensureTitleConsistency(out, snapshot) {
@@ -422,7 +886,6 @@ function applyExtremeMileageCaps(out, snapshot) {
   const miles = Number(snapshot?.mileage_miles);
   if (!Number.isFinite(miles) || miles < 250000) return;
   const hasRecords = hasServiceRecordsClaim(snapshot);
-  if (!hasRecords && out.confidence > 0.75) out.confidence = 0.75;
   if (!(hasRecords && out.confidence >= 0.85) && out.overall_score > 45) {
     out.overall_score = 45;
   }
@@ -455,7 +918,7 @@ function hasRecentMaintenanceClaim(snapshot) {
   const text = normalizeText(
     [snapshot?.seller_description, snapshot?.source_text, ...(snapshot?.about_items || [])].join(" ")
   );
-  return /(recent maintenance|within the last|last \d+\s*(months?|weeks?)|fresh oil change|new brake pads|full tune-?up|brand new tires|new tires|new (thermostat|water pump|radiator|starter|alternator|battery))/i.test(
+  return /(recent maintenance|within the last|last \d+\s*(months?|weeks?)|fresh oil change|oil changes?|all fluids? (just )?changed|fluids? changed|new brake pads|full tune-?up|brand new tires|new tires|new (thermostat|water pump|radiator|starter|alternator|battery))/i.test(
     text
   );
 }
@@ -815,6 +1278,14 @@ function normalizeLifespanEstimate(out, snapshot) {
 function ensureBuyerQuestions(out, snapshot, titleStatus) {
   const sellerText = normalizeText(snapshot?.seller_description);
   const mileage = Number(snapshot?.mileage_miles);
+  const drive = inferredDrivetrain(snapshot);
+  const trans = inferredTransmission(snapshot);
+  const engine = inferredEngine(snapshot);
+  const allText = sourceBlob(snapshot);
+  const ecoBoost = /ecoboost/i.test(engine || allText);
+  const liftOrLevel = /(level(\s|-)?kit|lift|rough country|coilover|extended cv)/i.test(allText);
+  const oversizedTires = /\b33("|”|in(ch)?)?\b|\b35("|”|in(ch)?)?\b/.test(allText);
+  const fx4 = /\bfx4\b/i.test(allText);
   const genericRe = /(any issues|any accidents|accident history|issues\?)/i;
   const componentRe =
     /(engine|transmission|trans\b|turbo|timing|diff|differential|transfer case|ptu|steering|rack|suspension|strut|ball joint|alternator|battery|a\/c|ac\b|coolant|radiator|oil|brake|drivetrain|4wd|awd)/i;
@@ -823,7 +1294,7 @@ function ensureBuyerQuestions(out, snapshot, titleStatus) {
   const isComponentSpecific = (q) => componentRe.test(q);
   const seen = new Set();
   const addUnique = (list, q) => {
-    const key = normalizeText(q);
+    const key = semanticTopicKey(q);
     if (!key || seen.has(key)) return;
     seen.add(key);
     list.push(ensureWhy(q));
@@ -835,10 +1306,11 @@ function ensureBuyerQuestions(out, snapshot, titleStatus) {
 
   const list = [];
   base.forEach((q) => addUnique(list, q));
+  const hasDrivetrainTopic = () => list.some((q) => /(drivetrain|2wd|4wd|awd|fwd|4hi|4lo)/i.test(q));
 
   const candidates = [];
   const make = normalizeText(snapshot?.make);
-  if (!snapshot?.drivetrain) {
+  if (!drive && !hasDrivetrainTopic()) {
     if (isTruckOrTruckBased(snapshot)) {
       candidates.push("Is it 2WD or 4WD, and does 4HI/4LO engage smoothly? (transfer case/actuator cost)");
     } else {
@@ -846,8 +1318,19 @@ function ensureBuyerQuestions(out, snapshot, titleStatus) {
       candidates.push(`Is it FWD or AWD${example}? (changes maintenance/traction)`);
     }
   }
-  if (!snapshot?.transmission || !snapshot?.engine) {
+  if (!trans || !engine) {
     candidates.push("Which transmission/engine is it exactly? (changes risk profile)");
+  }
+  if (ecoBoost) {
+    candidates.push("Any timing chain or cam phaser rattle on cold start? (EcoBoost wear signal)");
+    candidates.push("Any turbo replacement, boost leak, or intercooler moisture history? (forced-induction risk)");
+  }
+  if (liftOrLevel || oversizedTires) {
+    candidates.push("Was the level/lift kit professionally installed with alignment records? (front-end wear risk)");
+    candidates.push("Any CV axle, ball joint, or wheel-bearing work since tire/lift install? (suspension load)");
+  }
+  if (fx4) {
+    candidates.push("Does 4HI/4LO engage smoothly, and when were transfer case/diff fluids serviced? (FX4 upkeep)");
   }
   if (/new brake pads/i.test(sellerText)) {
     candidates.push("Were rotors resurfaced/replaced with the pads? (prevents vibration)");
@@ -884,13 +1367,26 @@ function ensureBuyerQuestions(out, snapshot, titleStatus) {
   }
   while (list.length < 4) addUnique(list, "Any warning lights or stored codes? (hidden faults)");
 
-  out.buyer_questions = list
+  out.buyer_questions = dedupeBySemanticTopic(
+    list
     .slice(0, 7)
     .map((q) => scrubUnsupportedDrivetrainQuestion(q, snapshot))
-    .map((q) => scrubTimingBeltQuestion(q, snapshot));
+    .map((q) => scrubTimingBeltQuestion(q, snapshot)),
+    7
+  );
 }
 
 function sharpenRiskFlags(out, snapshot, titleStatus) {
+  const drive = inferredDrivetrain(snapshot);
+  const trans = inferredTransmission(snapshot);
+  const engine = inferredEngine(snapshot);
+  const text = sourceBlob(snapshot);
+  const ecoBoost = /ecoboost/i.test(engine || text);
+  const liftOrLevel = /(level(\s|-)?kit|lift|rough country|coilover|extended cv)/i.test(text);
+  const oversizedTires = /\b33("|”|in(ch)?)?\b|\b35("|”|in(ch)?)?\b/.test(text);
+  const canopy = /\b(are\s+canopy|canopy|camper shell|topper)\b/i.test(text);
+  const lightingMods = /(led (light )?bar|fog\/flood lights?|hood (and )?roof mounts?|aux(iliary)? lighting)/i.test(text);
+  const miles = asNumber(snapshot?.mileage_miles, null);
   const flags = asArray(out.risk_flags).map((f) => asString(f, "")).filter(Boolean);
   const updated = [];
   const vagueHighMileage = /high mileage/i;
@@ -911,18 +1407,31 @@ function sharpenRiskFlags(out, snapshot, titleStatus) {
   if (titleStatus === "unknown") {
     derived.push("Title status unknown -> resale/insurance uncertainty ($unknown)");
   }
-  if (!snapshot?.drivetrain) {
+  const hasDrivetrainUnknownFlag = updated.some((x) => /(unknown|not stated).*(drivetrain|2wd|4wd|awd|fwd)/i.test(x));
+  if (!drive && !hasDrivetrainUnknownFlag) {
     derived.push("Drivetrain unknown -> parts/maintenance mismatch risk ($unknown)");
   }
-  if (!snapshot?.transmission) {
+  if (!trans) {
     derived.push("Transmission unknown -> service/repair risk ($unknown)");
   }
   if (!snapshot?.seller_description) {
     derived.push("Limited history -> deferred maintenance risk ($unknown)");
   }
+  if (ecoBoost && Number.isFinite(miles) && miles >= 120000) {
+    derived.push("High-mile EcoBoost -> turbo/cam-phaser/timing wear risk ($1,500–$4,000)");
+  }
+  if ((liftOrLevel || oversizedTires) && Number.isFinite(miles)) {
+    derived.push("Lift/oversize tires -> CV/ball-joint/wheel-bearing wear risk ($300–$1,200)");
+  }
+  if (canopy) {
+    derived.push("Canopy/topper fitment -> bed rail load/water-leak risk ($150–$800)");
+  }
+  if (lightingMods) {
+    derived.push("Aftermarket lighting -> wiring/fuse/relay quality risk ($100–$800)");
+  }
 
-  const combined = [...updated, ...derived];
-  out.risk_flags = combined.slice(0, 6).filter(Boolean);
+  const deduped = dedupeBySemanticTopic([...updated, ...derived], 6);
+  out.risk_flags = deduped.slice(0, 6).filter(Boolean);
   while (out.risk_flags.length < 3) {
     out.risk_flags.push("Inspection findings unknown -> hidden repair risk ($unknown)");
   }
@@ -974,6 +1483,7 @@ function applyCompletedServiceOverrides(out, snapshot) {
 
   const hasNewPads = /(new|brand new)\s+brake\s+pads/i.test(t) || /(fresh)\s+brake\s+pads/i.test(t);
   const hasFreshOil = /(fresh)\s+oil\s+change|oil\s+change\s*(done|completed)?/i.test(t);
+  const hasFluidsChanged = /(all fluids? (just )?changed|fluids? (just )?changed|fresh fluid service)/i.test(t);
   const hasTuneUp = /(full\s+tune-?up|tune-?up)/i.test(t);
 
   out.wear_items = asArray(out.wear_items).map((x) => {
@@ -1024,6 +1534,7 @@ function applyCompletedServiceOverrides(out, snapshot) {
   if (hasNewTires) addChecklist("Verify tire install date/receipt + check even wear (confirms alignment/suspension)");
   if (hasNewPads) addChecklist("Verify brake pad/rotor condition + test for pulsation (quality of brake job)");
   if (hasFreshOil) addChecklist("Confirm oil type/spec + look for leaks after warm idle (baseline health)");
+  if (hasFluidsChanged) addChecklist("Verify recent fluid service receipts (transmission, transfer case, differentials)");
   if (hasTuneUp) addChecklist("Ask what ‘tune-up’ included (plugs/filters/fluids) and verify receipts");
 
   const ensureQuestion = (q) => {
@@ -1034,8 +1545,16 @@ function applyCompletedServiceOverrides(out, snapshot) {
   if (hasNewTires) ensureQuestion("Do you have the tire invoice and install date? (confirms warranty/spec)");
   if (hasNewPads) ensureQuestion("Were rotors resurfaced/replaced with the pads? (prevents vibration)");
   if (hasTuneUp) ensureQuestion("What did the ‘full tune-up’ include exactly? (avoids vague claims)");
+  if (hasFluidsChanged) ensureQuestion("Do you have receipts for the recent fluid service? (confirms drivetrain maintenance)");
 
   out.buyer_questions = asArray(out.buyer_questions).slice(0, 7);
+
+  if (hasFluidsChanged) {
+    out.expected_maintenance_near_term = asArray(out.expected_maintenance_near_term).filter((x) => {
+      const item = normalizeText(x?.item);
+      return !/(transmission fluid|transfer case|differential fluid|driveline fluids)/i.test(item);
+    });
+  }
 }
 
 function dropGenericOilChangeFromNearTerm(out, snapshot) {
@@ -1079,6 +1598,288 @@ function replaceSpeculativeCELMaintenance(out, snapshot) {
   out.expected_maintenance_near_term = replaceIfSpeculative(out.expected_maintenance_near_term);
 }
 
+function ensureSpecificMaintenance(out, snapshot) {
+  const text = sourceBlob(snapshot);
+  const engine = inferredEngine(snapshot);
+  const drive = inferredDrivetrain(snapshot);
+  const miles = asNumber(snapshot?.mileage_miles, null);
+  const ecoBoost = /ecoboost/i.test(engine || text);
+  const fx4Or4wd = /\bfx4\b/i.test(text) || /\b4wd\b|\b4x4\b/i.test(normalizeText(drive || ""));
+  const hasFluidsChanged = /(all fluids? (just )?changed|fluids? (just )?changed|fresh fluid service)/i.test(text);
+  const liftOrOversize =
+    /(level(\s|-)?kit|lift|rough country|coilover|extended cv)/i.test(text) ||
+    /\b33("|”|in(ch)?)?\b|\b35("|”|in(ch)?)?\b/.test(text);
+
+  const addItem = (item) => {
+    const key = normalizeText(item.item);
+    const existing = asArray(out.expected_maintenance_near_term).some(
+      (x) => normalizeText(x?.item).includes(key) || key.includes(normalizeText(x?.item))
+    );
+    if (!existing) out.expected_maintenance_near_term.unshift(item);
+  };
+
+  if (ecoBoost && Number.isFinite(miles) && miles >= 100000) {
+    addItem({
+      item: "Turbo/intercooler hose + boost system inspection",
+      typical_mileage_range: "Now",
+      why_it_matters: "High-mile forced induction can hide expensive leaks/wear",
+      estimated_cost_diy: "$50–$200",
+      estimated_cost_shop: "$200–$600"
+    });
+    addItem({
+      item: "Timing chain/cam phaser cold-start noise inspection",
+      typical_mileage_range: "Now",
+      why_it_matters: "Early wear can become major repair",
+      estimated_cost_diy: "$0–$100 (diagnostic)",
+      estimated_cost_shop: "$150–$350 (diagnostic)"
+    });
+  }
+
+  if (fx4Or4wd && !hasFluidsChanged) {
+    addItem({
+      item: "Transfer case + front/rear differential fluid service",
+      typical_mileage_range: "Now",
+      why_it_matters: "4WD driveline fluids are key at higher mileage",
+      estimated_cost_diy: "$120–$250",
+      estimated_cost_shop: "$250–$500"
+    });
+  }
+
+  if (liftOrOversize) {
+    addItem({
+      item: "Front-end/CV/ball-joint inspection + alignment verification",
+      typical_mileage_range: "Now",
+      why_it_matters: "Lift and larger tires increase front suspension stress",
+      estimated_cost_diy: "$0–$120",
+      estimated_cost_shop: "$150–$450"
+    });
+  }
+
+  out.expected_maintenance_near_term = asArray(out.expected_maintenance_near_term).slice(0, 6);
+}
+
+function normalizeVerdictTone(out, snapshot) {
+  const score = asNumber(out?.overall_score, null);
+  if (!Number.isFinite(score)) return;
+
+  const grade = letterGradeFromScore(score);
+  const title = deriveTitleStatus(snapshot);
+  const hasVin = hasKnownValue(snapshot?.vin);
+  const hasDrive = hasKnownValue(inferredDrivetrain(snapshot));
+  const miles = asNumber(snapshot?.mileage_miles, null);
+  const reasons = [];
+  if (Number.isFinite(miles) && miles >= 200000) reasons.push(`very high mileage (${Math.round(miles).toLocaleString("en-US")} mi)`);
+  else if (Number.isFinite(miles) && miles >= 150000) reasons.push(`high mileage (${Math.round(miles).toLocaleString("en-US")} mi)`);
+  if (title === "no_title") reasons.push("no title is disclosed");
+  else if (title === "rebuilt") reasons.push("rebuilt title risk");
+  else if (title === "lien") reasons.push("lien/title transfer risk");
+
+  const priceOpinion = asString(out?.price_opinion, "");
+  const above = priceOpinion.match(/above fair range by about (\$[\d,]+)/i);
+  const below = priceOpinion.match(/below fair range by about (\$[\d,]+)/i);
+  const overAsk = priceOpinion.match(/over ask by about (\$[\d,]+)/i);
+  const nearFair = /near fair range/i.test(priceOpinion);
+  if (above) reasons.push(`asking is above fair value by about ${above[1]}`);
+  else if (overAsk) reasons.push(`asking is above target by about ${overAsk[1]}`);
+
+  const uncertainty = [];
+  if (title === "unknown") uncertainty.push("title is unverified");
+  if (!hasVin) uncertainty.push("VIN is missing");
+  if (!hasDrive) uncertainty.push("drivetrain is unconfirmed");
+
+  const primary = reasons.slice(0, 2);
+  if (!primary.length) primary.push("overall listing risk and condition uncertainty");
+  const reasonText = `Grade ${grade} reflects ${primary.join(" and ")}.`;
+
+  let priceText = "Price view: asking appears within the estimated fair range.";
+  if (above) priceText = `Price view: asking is above fair value by about ${above[1]}.`;
+  else if (below) priceText = `Price view: asking is below fair value by about ${below[1]}.`;
+  else if (overAsk) priceText = `Price view: asking is slightly above target by about ${overAsk[1]}.`;
+  else if (nearFair) priceText = "Price view: asking is near the estimated fair range.";
+
+  const uncertaintyText = uncertainty.length ? ` Missing info: ${uncertainty.join("; ")}.` : "";
+
+  let actionText = "Conditional buy — proceed only after inspection and records verification.";
+  if (score <= 34) actionText = "High risk — likely pass unless steep discount and clean inspection.";
+  else if (score >= 80) actionText = "Buy candidate — still verify VIN/history and inspection.";
+  else if (score >= 60) actionText = "Conditional buy — reasonable candidate if inspection and history check out.";
+
+  out.final_verdict = `${reasonText} ${priceText}${uncertaintyText} ${actionText}`;
+}
+
+function buildDeterministicSummary(out, snapshot) {
+  const year = snapshot?.year;
+  const make = asString(snapshot?.make, "").toUpperCase();
+  const model = asString(snapshot?.model, "").toUpperCase();
+  const ask = asNumber(snapshot?.price_usd, null);
+  const miles = asNumber(snapshot?.mileage_miles, null);
+  const title = deriveTitleStatus(snapshot);
+  const band = computeValuationBand(snapshot, out);
+
+  const subject = [year, make, model].filter(Boolean).join(" ").trim() || "This vehicle";
+  const facts = `${subject} is listed at ${formatUsdWhole(ask)} with ${
+    Number.isFinite(miles) ? `${Math.round(miles).toLocaleString("en-US")} miles` : "unknown mileage"
+  }${title === "clean" ? " and seller-claimed clean title" : ""}.`;
+
+  let priceLine = "Pricing appears in line with the estimated range.";
+  if (band) {
+    if (ask > band.fair_high) {
+      priceLine = `Asking price is above estimated fair value by about ${formatUsdWhole(ask - band.fair_high)}.`;
+    } else if (ask < band.fair_low) {
+      priceLine = `Asking price is below estimated fair value by about ${formatUsdWhole(band.fair_low - ask)}.`;
+    } else {
+      priceLine = `Asking price is within estimated fair range (${formatUsdWhole(band.fair_low)}-${formatUsdWhole(
+        band.fair_high
+      )}).`;
+    }
+  }
+
+  const expectations = [];
+  if (Number.isFinite(miles) && miles >= 150000) expectations.push("expect higher wear-item and drivetrain maintenance risk");
+  else if (Number.isFinite(miles) && miles <= 60000) expectations.push("mileage is favorable for age");
+  if (!hasKnownValue(snapshot?.vin)) expectations.push("verify VIN/history before committing");
+  if (!hasKnownValue(inferredDrivetrain(snapshot))) expectations.push("confirm drivetrain to avoid ownership mismatch");
+  if (!snapshot?.seller_description) expectations.push("listing notes are sparse, so inspection carries more weight");
+
+  const expectationLine = expectations.length
+    ? `Buyer expectation: ${expectations.slice(0, 2).join("; ")}.`
+    : "Buyer expectation: confirm maintenance records and inspection results before purchase.";
+
+  out.summary = `${facts} ${priceLine} ${expectationLine}`;
+}
+
+function formatUsdWhole(n) {
+  if (!Number.isFinite(n)) return "$unknown";
+  return `$${Math.round(n).toLocaleString("en-US")}`;
+}
+
+function hasHeavyModificationSignals(snapshot) {
+  const text = sourceBlob(snapshot);
+  return /(lift|leveling kit|rough country|coilover|spacer|cold air intake|throttle body spacer|aftermarket wheels|krank wheels|extended cv|yukon rear end|re-gear|regear|tuned|tune|straight pipe|cat-?back|headers)/i.test(
+    text
+  );
+}
+
+function marketRetentionAdjustment(snapshot) {
+  const make = normalizeText(snapshot?.make);
+  const model = normalizeText(snapshot?.model);
+
+  // Negative values reduce discount (stronger resale retention).
+  if (make === "toyota" || make === "lexus") {
+    if (/(rav4|4runner|tacoma|tundra|sequoia|gx|rx|highlander)/.test(model)) return -0.03;
+    return -0.02;
+  }
+  if (make === "honda" || make === "acura") {
+    if (/(cr-v|crv|pilot|ridgeline|mdx|rdx)/.test(model)) return -0.02;
+    return -0.01;
+  }
+  if (make === "mazda" || make === "subaru") return -0.01;
+  if (make === "jeep" && /(liberty|compass|patriot)/.test(model)) return 0.01;
+  return 0;
+}
+
+function computeValuationBand(snapshot, out) {
+  const ask = asNumber(snapshot?.price_usd, null);
+  if (!Number.isFinite(ask) || ask <= 0) return null;
+
+  const miles = asNumber(snapshot?.mileage_miles, null);
+  const conf = clamp(asNumber(out?.confidence, 0.5), 0, 1);
+  const titleStatus = deriveTitleStatus(snapshot);
+  const hasVin = hasKnownValue(snapshot?.vin);
+  const modified = hasHeavyModificationSignals(snapshot);
+  const drive = inferredDrivetrain(snapshot);
+  const trans = inferredTransmission(snapshot);
+  const engine = inferredEngine(snapshot);
+  const retentionAdj = marketRetentionAdjustment(snapshot);
+
+  let discount = 0;
+
+  if (Number.isFinite(miles)) {
+    if (miles >= 250000) discount += 0.14;
+    else if (miles >= 200000) discount += 0.1;
+    else if (miles >= 160000) discount += 0.07;
+    else if (miles >= 120000) discount += 0.04;
+    else if (miles >= 90000) discount += 0.02;
+  } else {
+    discount += 0.02;
+  }
+
+  if (titleStatus === "unknown") discount += 0.05;
+  else if (titleStatus === "lien") discount += 0.09;
+  else if (titleStatus === "rebuilt") discount += 0.2;
+  else if (titleStatus === "no_title") discount += 0.35;
+
+  if (!drive) discount += 0.01;
+  if (!trans) discount += 0.005;
+  if (!engine) discount += 0.005;
+  if (!snapshot?.seller_description) discount += 0.015;
+  if (!hasVin) discount += 0.01;
+  if (modified) discount += 0.02;
+
+  discount += retentionAdj;
+
+  const discountCap = titleStatus === "no_title" ? 0.6 : 0.28;
+  discount = clamp(discount, -0.08, discountCap);
+
+  const fairMid = Math.max(500, Math.round(ask * (1 - discount)));
+  const spreadPct = clamp(0.07 + (1 - conf) * 0.06 + (modified ? 0.01 : 0), 0.06, 0.13);
+  const spread = Math.max(500, Math.round(fairMid * spreadPct));
+  const fairLow = Math.max(500, fairMid - spread);
+  const fairHigh = Math.max(fairLow, fairMid + spread);
+
+  return {
+    ask,
+    fair_low: fairLow,
+    fair_mid: fairMid,
+    fair_high: fairHigh
+  };
+}
+
+function applyDeterministicValuationBand(out, snapshot) {
+  const band = computeValuationBand(snapshot, out);
+  if (!band) return;
+
+  const structured = `fair_low=${formatUsdWhole(band.fair_low)}, fair_mid=${formatUsdWhole(
+    band.fair_mid
+  )}, fair_high=${formatUsdWhole(band.fair_high)}`;
+  const ask = band.ask;
+
+  let priceCall = "near fair range";
+  if (ask > band.fair_high) priceCall = `above fair range by about ${formatUsdWhole(ask - band.fair_high)}`;
+  else if (ask < band.fair_low) priceCall = `below fair range by about ${formatUsdWhole(band.fair_low - ask)}`;
+
+  out.market_value_estimate = `Fair value band: ${formatUsdWhole(band.fair_low)}–${formatUsdWhole(
+    band.fair_high
+  )} (mid ${formatUsdWhole(band.fair_mid)}).`;
+  out.price_opinion = `Deterministic valuation target: ${structured}. Asking ${formatUsdWhole(
+    ask
+  )} is ${priceCall}.`;
+
+  if (!Number.isFinite(out.overall_score)) return;
+
+  // Deal-context scoring: grade should reflect how good/bad the listing price is.
+  const overPct = band.fair_high > 0 ? (ask - band.fair_high) / band.fair_high : 0;
+  const underPct = band.fair_low > 0 ? (band.fair_low - ask) / band.fair_low : 0;
+
+  let delta = 0;
+  if (underPct > 0) {
+    if (underPct >= 0.4) delta += 30;
+    else if (underPct >= 0.25) delta += 22;
+    else if (underPct >= 0.15) delta += 15;
+    else if (underPct >= 0.08) delta += 9;
+    else if (underPct >= 0.03) delta += 4;
+  } else if (overPct > 0) {
+    if (overPct >= 0.3) delta -= 20;
+    else if (overPct >= 0.2) delta -= 14;
+    else if (overPct >= 0.12) delta -= 9;
+    else if (overPct >= 0.05) delta -= 5;
+    else if (overPct >= 0.02) delta -= 2;
+  }
+
+  out.deal_adjustment = delta;
+  out.overall_score = clamp(Math.round(out.overall_score + delta), 0, 100);
+}
+
 /**
  * Coerce/fill required output so UI doesn't break even if the model slips.
  * Also enforces some consistency constraints.
@@ -1090,26 +1891,26 @@ function coerceAndFill(raw, snapshot) {
   out.year_model_reputation = asString(raw.year_model_reputation);
 
   out.expected_maintenance_near_term = asArray(raw.expected_maintenance_near_term).map((x) => ({
-    item: asString(x?.item),
-    typical_mileage_range: asString(x?.typical_mileage_range),
-    why_it_matters: asString(x?.why_it_matters),
-    estimated_cost_diy: asString(x?.estimated_cost_diy),
-    estimated_cost_shop: asString(x?.estimated_cost_shop)
+    item: stripLeadingDecorators(asString(x?.item)),
+    typical_mileage_range: stripLeadingDecorators(asString(x?.typical_mileage_range)),
+    why_it_matters: stripLeadingDecorators(asString(x?.why_it_matters)),
+    estimated_cost_diy: stripLeadingDecorators(asString(x?.estimated_cost_diy)),
+    estimated_cost_shop: stripLeadingDecorators(asString(x?.estimated_cost_shop))
   }));
 
   out.common_issues = asArray(raw.common_issues).map((x) => ({
-    issue: asString(x?.issue),
-    typical_failure_mileage: asString(x?.typical_failure_mileage),
-    severity: asString(x?.severity),
-    estimated_cost_diy: asString(x?.estimated_cost_diy),
-    estimated_cost_shop: asString(x?.estimated_cost_shop)
+    issue: stripLeadingDecorators(asString(x?.issue)),
+    typical_failure_mileage: stripLeadingDecorators(asString(x?.typical_failure_mileage)),
+    severity: stripLeadingDecorators(asString(x?.severity)),
+    estimated_cost_diy: stripLeadingDecorators(asString(x?.estimated_cost_diy)),
+    estimated_cost_shop: stripLeadingDecorators(asString(x?.estimated_cost_shop))
   }));
   out.wear_items = asArray(raw.wear_items).map((x) => ({
-    item: asString(x?.item),
-    typical_mileage_range: asString(x?.typical_mileage_range),
-    why_it_matters: asString(x?.why_it_matters),
-    estimated_cost_diy: asString(x?.estimated_cost_diy),
-    estimated_cost_shop: asString(x?.estimated_cost_shop)
+    item: stripLeadingDecorators(asString(x?.item)),
+    typical_mileage_range: stripLeadingDecorators(asString(x?.typical_mileage_range)),
+    why_it_matters: stripLeadingDecorators(asString(x?.why_it_matters)),
+    estimated_cost_diy: stripLeadingDecorators(asString(x?.estimated_cost_diy)),
+    estimated_cost_shop: stripLeadingDecorators(asString(x?.estimated_cost_shop))
   }));
 
   // Still read from model, but we overwrite with deterministic builder.
@@ -1120,24 +1921,25 @@ function coerceAndFill(raw, snapshot) {
   out.mechanical_skill_required = asString(raw.mechanical_skill_required);
   out.daily_driver_vs_project = asString(raw.daily_driver_vs_project);
 
-  out.upsides = asArray(raw.upsides).map((s) => asString(s)).filter((s) => s !== "unknown");
-  out.inspection_checklist = asArray(raw.inspection_checklist).map((s) => asString(s));
-  out.buyer_questions = asArray(raw.buyer_questions).map((s) => asString(s));
+  out.upsides = asArray(raw.upsides)
+    .map((s) => stripLeadingDecorators(s))
+    .filter((s) => s && s !== "unknown");
+  out.inspection_checklist = asArray(raw.inspection_checklist).map((s) => stripLeadingDecorators(s));
+  out.buyer_questions = asArray(raw.buyer_questions).map((s) => stripLeadingDecorators(s));
 
-  out.risk_flags = asArray(raw.risk_flags).map((s) => asString(s));
-  out.deal_breakers = asArray(raw.deal_breakers).map((s) => asString(s));
+  out.risk_flags = asArray(raw.risk_flags).map((s) => stripLeadingDecorators(s));
+  out.deal_breakers = asArray(raw.deal_breakers).map((s) => stripLeadingDecorators(s));
   out.tags = asArray(raw.tags).map((s) => asString(s)).slice(0, 6);
 
-  out.confidence = clamp(asNumber(raw.confidence, 0.5), 0, 1);
+  const evidenceCoverage = computeEvidenceCoverage(snapshot);
+  out.confidence = clamp(evidenceCoverage, 0, 1);
 
-  // Score: prefer model score, else derive from confidence (but don't overwrite a valid score)
-  let score = asNumber(raw.overall_score, null);
-  const confidenceScore = Math.round(out.confidence * 100);
-  if (score == null) score = confidenceScore;
+  // Score: use deterministic heuristic so grade/verdict behavior is stable and explainable.
+  const heuristicScore = computeHeuristicDecisionScore(snapshot, out);
+  let score = heuristicScore;
+  if (deriveTitleStatus(snapshot) === "no_title") score = Math.min(score, 24);
   score = clamp(Math.round(score), 0, 100);
-  if (Number.isFinite(score) && Math.abs(score - confidenceScore) >= 40) {
-    score = confidenceScore;
-  }
+  out.risk_score_base = score;
   out.overall_score = score;
 
   out.final_verdict = asString(raw.final_verdict);
@@ -1174,11 +1976,18 @@ function coerceAndFill(raw, snapshot) {
   fixWearItemCosts(out, snapshot);
   applyCompletedServiceOverrides(out, snapshot);
   dropGenericOilChangeFromNearTerm(out, snapshot);
+  ensureSpecificMaintenance(out, snapshot);
   ensureBuyerQuestions(out, snapshot, derivedTitleStatus);
   sharpenRiskFlags(out, snapshot, derivedTitleStatus);
   groundReputation(out);
   normalizeLifespanEstimate(out, snapshot);
   applyExtremeMileageCaps(out, snapshot);
+  enforceFactConsistency(out, snapshot);
+  applyDeterministicValuationBand(out, snapshot);
+  buildDeterministicSummary(out, snapshot);
+  out.deal_grade = letterGradeFromScore(out.overall_score);
+  out.risk_level = riskLevelFromScore(asNumber(out.risk_score_base, out.overall_score));
+  normalizeVerdictTone(out, snapshot);
 
   return out;
 }
@@ -1630,24 +2439,38 @@ export default {
 
       const cached = await cache.match(cacheKey);
       if (cached) {
+        let freeQuota = null;
+        if (!authValidated) {
+          freeQuota = await consumeFreeAnalysisSlot(request, cache, snapshotKey);
+          if (!freeQuota.ok) return freeLimitResponse(origin, requestId, snapshotKey);
+        }
         const withCors = new Response(cached.body, cached);
         withCors.headers.set("Access-Control-Allow-Origin", origin || "*");
         withCors.headers.set("X-Cache", "HIT");
         withCors.headers.set("X-Dedupe", "CACHE_HIT");
         withCors.headers.set("X-Request-Id", requestId);
         withCors.headers.set("X-Snapshot-Key", snapshotKey.slice(0, 12));
+        withCors.headers.set("X-User-Validated", authValidated ? "true" : "false");
+        if (!authValidated && freeQuota) withCors.headers.set("X-Free-Remaining", String(freeQuota.remaining));
         return withCors;
       }
 
       return await dedupe(snapshotKey, async () => {
         const cached2 = await cache.match(cacheKey);
         if (cached2) {
+          let freeQuota = null;
+          if (!authValidated) {
+            freeQuota = await consumeFreeAnalysisSlot(request, cache, snapshotKey);
+            if (!freeQuota.ok) return freeLimitResponse(origin, requestId, snapshotKey);
+          }
           const withCors = new Response(cached2.body, cached2);
           withCors.headers.set("Access-Control-Allow-Origin", origin || "*");
           withCors.headers.set("X-Cache", "HIT");
           withCors.headers.set("X-Dedupe", "LOCK_HIT");
           withCors.headers.set("X-Request-Id", requestId);
           withCors.headers.set("X-Snapshot-Key", snapshotKey.slice(0, 12));
+          withCors.headers.set("X-User-Validated", authValidated ? "true" : "false");
+          if (!authValidated && freeQuota) withCors.headers.set("X-Free-Remaining", String(freeQuota.remaining));
           return withCors;
         }
 
@@ -1672,16 +2495,22 @@ export default {
           return jsonResponse({ error: "Server missing OPENAI_API_KEY" }, origin, 500);
         }
 
+        const normalizedFacts = buildNormalizedFacts(snapshot);
         const facts = {
-          year: snapshot.year,
-          make: snapshot.make,
-          model: snapshot.model,
-          trim: snapshot.trim,
-          price_usd: snapshot.price_usd,
-          mileage_miles: snapshot.mileage_miles,
-          drivetrain: snapshot.drivetrain,
-          transmission: snapshot.transmission,
-          title_status: snapshot.title_status,
+          year: normalizedFacts.year.value,
+          make: normalizedFacts.make.value,
+          model: normalizedFacts.model.value,
+          trim: normalizedFacts.trim.value,
+          price_usd: normalizedFacts.price_usd.value,
+          mileage_miles: normalizedFacts.mileage_miles.value,
+          drivetrain: normalizedFacts.drivetrain.value,
+          transmission: normalizedFacts.transmission.value,
+          engine: normalizedFacts.engine.value,
+          title_status: normalizedFacts.title_status.value,
+          owner_count_claimed: normalizedFacts.owner_count_claimed.value,
+          accident_claimed: normalizedFacts.accident_claimed.value,
+          records_claimed: normalizedFacts.records_claimed.value,
+          modifications_detected: normalizedFacts.modifications_detected.value,
           seller_claims: snapshot.seller_description
         };
 
@@ -1689,9 +2518,16 @@ export default {
         const userPrompt = [
           "Evaluate this used car listing snapshot for a buyer.",
           "Be specific. Do not contradict the canonical facts.",
+          "Do not claim a field is missing if canonical facts include a value for it.",
+          "If canonical facts conflict with free-form listing text, trust canonical facts.",
+          "Only mark a field unknown when normalized_facts.<field>.value is null.",
+          "If a fact source is 'derived', you may use it but label it as inferred in wording.",
           "",
           "Canonical facts (do not contradict):",
           JSON.stringify(facts, null, 2),
+          "",
+          "Normalized facts with provenance/confidence/evidence:",
+          JSON.stringify(normalizedFacts, null, 2),
           "",
           "Field requirements (follow exactly):",
           "- summary: 2–4 sentences using listing facts.",
@@ -1771,12 +2607,18 @@ export default {
         }
 
         const final = coerceAndFill(parsed, snapshot);
+        let freeQuota = null;
+        if (!authValidated) {
+          freeQuota = await consumeFreeAnalysisSlot(request, cache, snapshotKey);
+          if (!freeQuota.ok) return freeLimitResponse(origin, requestId, snapshotKey);
+        }
         const res = jsonResponse(final, origin, 200);
         res.headers.set("X-Cache", "MISS");
         res.headers.set("X-Dedupe", "LOCK_MISS");
         res.headers.set("X-Request-Id", requestId);
         res.headers.set("X-Snapshot-Key", snapshotKey.slice(0, 12));
         res.headers.set("X-User-Validated", authValidated ? "true" : "false");
+        if (!authValidated && freeQuota) res.headers.set("X-Free-Remaining", String(freeQuota.remaining));
         if (authUser?.id) res.headers.set("X-User-Id", authUser.id);
 
         ctx?.waitUntil?.(cache.put(cacheKey, res.clone()));

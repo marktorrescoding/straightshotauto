@@ -2,7 +2,7 @@
   if (window.top !== window.self) return;
   if (window.FBCO_CONTENT_LOADED) return;
   window.FBCO_CONTENT_LOADED = true;
-  const UPDATE_DEBOUNCE_MS = 900;
+  const UPDATE_DEBOUNCE_MS = 300;
   const API_URL = "https://car-bot.car-bot.workers.dev/analyze";
   const AUTH_STATUS_URL = "https://car-bot.car-bot.workers.dev/auth/status";
   const BILLING_CHECKOUT_URL = "https://car-bot.car-bot.workers.dev/billing/checkout";
@@ -11,14 +11,66 @@
   const SUPABASE_URL = "https://uluvqqypgdpsxzutojdd.supabase.co";
   const SUPABASE_ANON_KEY =
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVsdXZxcXlwZ2Rwc3h6dXRvamRkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAwNzY1MDgsImV4cCI6MjA4NTY1MjUwOH0.m49_Y868P0Vpw5vT3SuDDEXbsSN3VT80CMhPWP1HCH8";
-  const FREE_LIMIT = 1;
+  const FREE_LIMIT = 5;
   const AUTH_STORAGE_KEY = "fbco.auth.session.v1";
   const AUTH_EMAIL_KEY = "fbco.auth.email.v1";
+  const AUTH_VALIDATED_UNTIL_KEY = "fbco.auth.validated.until.v1";
   const FREE_COUNT_KEY = "fbco.free.count.v1";
   const FREE_KEY_KEY = "fbco.free.snapshot.v1";
   const FREE_DAY_KEY = "fbco.free.day.v1";
+  const FREE_SYNC_DAY_KEY = "fbco.free.sync.day.v1";
   const CHECKOUT_PENDING_KEY = "fbco.checkout.pending.v1";
   const AUTH_MODE = "password";
+  const NAV_CLEAR_MS = 1500;
+  let authHydrationPromise = null;
+  let activeAnalyzeController = null;
+  if (!window.FBCO_STATE) {
+    window.FBCO_STATE = {
+      overlayId: "fb-car-overlay-mvp",
+      dismissed: false,
+      isUserSelecting: false,
+      analysisLoading: false,
+      analysisError: null,
+      lastAnalysis: null,
+      lastSnapshotKey: null,
+      analysisSeq: 0,
+      analysisReady: false,
+      lastVehicle: null,
+      lastRenderKey: null,
+      authSession: null,
+      authValidated: false,
+      authMessage: "",
+      freeCount: 0,
+      analysisGated: false
+    };
+  }
+  if (!window.FBCO_storage) {
+    window.FBCO_storage = {
+      get(key, fallback) {
+        try {
+          const v = localStorage.getItem(key);
+          return v == null ? fallback : JSON.parse(v);
+        } catch {
+          return fallback;
+        }
+      },
+      set(key, value) {
+        try {
+          localStorage.setItem(key, JSON.stringify(value));
+        } catch {}
+      }
+    };
+  }
+  const debounce =
+    typeof window.FBCO_debounce === "function"
+      ? window.FBCO_debounce
+      : (fn, waitMs) => {
+          let t = null;
+          return function (...args) {
+            if (t) clearTimeout(t);
+            t = setTimeout(() => fn.apply(this, args), waitMs);
+          };
+        };
 
   function isItemPage() {
     return /\/marketplace\/item\//.test(location.pathname);
@@ -64,12 +116,17 @@
 
   function buildAccessInfo(state) {
     const freeCount = loadFreeCount();
+    const quotaSynced = isFreeQuotaSyncedToday();
+    const storedSession = loadAuthSession();
+    const activeSession = state?.authSession?.access_token ? state.authSession : storedSession;
+    const validated = Boolean(state?.authValidated);
     return {
-      authenticated: Boolean(state?.authSession?.access_token),
-      validated: Boolean(state?.authValidated),
+      authenticated: Boolean(activeSession?.access_token),
+      validated,
       freeCount,
-      freeRemaining: Math.max(0, FREE_LIMIT - freeCount),
-      email: state?.authSession?.user?.email || "",
+      freeRemaining: validated || quotaSynced ? Math.max(0, FREE_LIMIT - freeCount) : null,
+      freeQuotaSynced: quotaSynced,
+      email: activeSession?.user?.email || "",
       message: state?.authMessage || "",
       authMode: AUTH_MODE,
       lastEmail: window.FBCO_storage.get(AUTH_EMAIL_KEY, "")
@@ -80,12 +137,80 @@
     return window.FBCO_storage.get(AUTH_STORAGE_KEY, null);
   }
 
+  function loadValidatedUntil() {
+    const until = Number(window.FBCO_storage.get(AUTH_VALIDATED_UNTIL_KEY, 0)) || 0;
+    return until > Date.now() ? until : 0;
+  }
+
+  function cacheValidatedState(validated, ttlMs = 12 * 60 * 60 * 1000) {
+    const until = validated ? Date.now() + ttlMs : 0;
+    window.FBCO_storage.set(AUTH_VALIDATED_UNTIL_KEY, until);
+  }
+
+  function normalizeAuthSession(data, prev = null) {
+    if (!data?.access_token) return null;
+    const expiresAt = Number(data.expires_at);
+    const expiresIn = Number(data.expires_in);
+    const fallbackPrev = Number(prev?.expires_at);
+    const computedExpiresAt = Number.isFinite(expiresAt)
+      ? expiresAt
+      : Number.isFinite(expiresIn)
+      ? Math.floor(Date.now() / 1000) + expiresIn
+      : Number.isFinite(fallbackPrev)
+      ? fallbackPrev
+      : null;
+    return {
+      access_token: data.access_token,
+      refresh_token: data.refresh_token || prev?.refresh_token || null,
+      expires_at: computedExpiresAt,
+      token_type: data.token_type || prev?.token_type || "bearer",
+      user: data.user || prev?.user || null
+    };
+  }
+
+  function syncAuthToChromeStorage(session) {
+    if (!chrome?.storage?.local?.set) return;
+    try {
+      chrome.storage.local.set({ [AUTH_STORAGE_KEY]: session });
+    } catch {
+      // ignore
+    }
+  }
+
   function saveAuthSession(session) {
     window.FBCO_storage.set(AUTH_STORAGE_KEY, session);
+    syncAuthToChromeStorage(session);
   }
 
   function clearAuthSession() {
     window.FBCO_storage.set(AUTH_STORAGE_KEY, null);
+    window.FBCO_storage.set(AUTH_VALIDATED_UNTIL_KEY, 0);
+    syncAuthToChromeStorage(null);
+  }
+
+  async function hydrateAuthFromChromeStorage() {
+    if (authHydrationPromise) return authHydrationPromise;
+    authHydrationPromise = (async () => {
+      if (!chrome?.storage?.local?.get) return;
+      try {
+        const data = await new Promise((resolve) => {
+          chrome.storage.local.get([AUTH_STORAGE_KEY, AUTH_EMAIL_KEY], (res) => resolve(res || {}));
+        });
+        if (Object.prototype.hasOwnProperty.call(data, AUTH_STORAGE_KEY)) {
+          const hydrated = normalizeAuthSession(data[AUTH_STORAGE_KEY], loadAuthSession());
+          window.FBCO_storage.set(AUTH_STORAGE_KEY, hydrated);
+          if (window.FBCO_STATE && hydrated?.access_token) {
+            window.FBCO_STATE.authSession = hydrated;
+          }
+        }
+        if (Object.prototype.hasOwnProperty.call(data, AUTH_EMAIL_KEY)) {
+          window.FBCO_storage.set(AUTH_EMAIL_KEY, data[AUTH_EMAIL_KEY] ?? "");
+        }
+      } catch {
+        // ignore
+      }
+    })();
+    return authHydrationPromise;
   }
 
   function currentDayStamp() {
@@ -99,6 +224,7 @@
       window.FBCO_storage.set(FREE_DAY_KEY, today);
       window.FBCO_storage.set(FREE_COUNT_KEY, 0);
       window.FBCO_storage.set(FREE_KEY_KEY, null);
+      window.FBCO_storage.set(FREE_SYNC_DAY_KEY, null);
       return 0;
     }
     return Number(window.FBCO_storage.get(FREE_COUNT_KEY, 0)) || 0;
@@ -115,6 +241,14 @@
 
   function saveLastFreeKey(key) {
     window.FBCO_storage.set(FREE_KEY_KEY, key);
+  }
+
+  function markFreeQuotaSyncedToday() {
+    window.FBCO_storage.set(FREE_SYNC_DAY_KEY, currentDayStamp());
+  }
+
+  function isFreeQuotaSyncedToday() {
+    return window.FBCO_storage.get(FREE_SYNC_DAY_KEY, null) === currentDayStamp();
   }
 
   function markCheckoutPending(ms = 2 * 60 * 1000) {
@@ -140,7 +274,13 @@
   if (chrome?.storage?.onChanged) {
     chrome.storage.onChanged.addListener((changes, areaName) => {
       if (areaName !== "local") return;
-      if (changes[AUTH_STORAGE_KEY]) onAuthSessionChanged();
+      if (changes[AUTH_STORAGE_KEY]) {
+        window.FBCO_storage.set(AUTH_STORAGE_KEY, changes[AUTH_STORAGE_KEY].newValue ?? null);
+        onAuthSessionChanged();
+      }
+      if (changes[AUTH_EMAIL_KEY]) {
+        window.FBCO_storage.set(AUTH_EMAIL_KEY, changes[AUTH_EMAIL_KEY].newValue ?? "");
+      }
     });
   }
 
@@ -156,19 +296,21 @@
     });
     if (!res.ok) return session;
     const data = await res.json();
-    const next = {
-      access_token: data.access_token,
-      refresh_token: data.refresh_token,
-      expires_at: data.expires_at,
-      user: data.user
-    };
+    const next = normalizeAuthSession(data, session);
+    if (!next) return session;
     saveAuthSession(next);
     return next;
   }
 
   async function getValidSession() {
-    const session = loadAuthSession();
-    if (!session?.access_token || !session?.expires_at) return null;
+    await hydrateAuthFromChromeStorage();
+    const rawSession = loadAuthSession();
+    const session = normalizeAuthSession(rawSession, rawSession);
+    if (!session?.access_token) return null;
+    if (!session?.expires_at) {
+      if (session.refresh_token) return refreshSession(session);
+      return session;
+    }
     const expiresAtMs = session.expires_at * 1000;
     if (Date.now() + 60_000 < expiresAtMs) return session;
     return refreshSession(session);
@@ -208,12 +350,8 @@
     });
     if (!res.ok) throw new Error("Invalid code");
     const data = await res.json();
-    const session = {
-      access_token: data.access_token,
-      refresh_token: data.refresh_token,
-      expires_at: data.expires_at,
-      user: data.user
-    };
+    const session = normalizeAuthSession(data);
+    if (!session) throw new Error("Invalid login session");
     saveAuthSession(session);
     return session;
   }
@@ -234,27 +372,28 @@
     });
     if (!res.ok) throw new Error("Invalid email or password");
     const data = await res.json();
-    const session = {
-      access_token: data.access_token,
-      refresh_token: data.refresh_token,
-      expires_at: data.expires_at,
-      user: data.user
-    };
+    const session = normalizeAuthSession(data);
+    if (!session) throw new Error("Invalid login session");
     saveAuthSession(session);
     return session;
   }
 
   async function fetchAuthStatus(session) {
     if (!session?.access_token) return { authenticated: false };
-    const res = await fetch(AUTH_STATUS_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${session.access_token}`,
-        "Content-Type": "application/json"
-      }
-    });
-    if (!res.ok) return { authenticated: false };
-    return res.json();
+    try {
+      const res = await fetch(AUTH_STATUS_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          "Content-Type": "application/json"
+        }
+      });
+      if (res.ok) return res.json();
+      if (res.status === 401 || res.status === 403) return { authenticated: false, validated: false, hardFail: true };
+      return { authenticated: true, validated: null, transient: true };
+    } catch {
+      return { authenticated: true, validated: null, transient: true };
+    }
   }
 
   function startCheckout(popup, email) {
@@ -277,6 +416,9 @@
     if (!opts.force && window.FBCO_ANALYZE_INFLIGHT && window.FBCO_ANALYZE_KEY === key) return;
     if (state.analysisLoading && !opts.retry) return;
     if (!opts.force && state.analysisRequestedKey === key) return;
+    if (!opts.force && state.lastSnapshotKey === key && state.analysisReady && state.lastAnalysis && !state.analysisError) {
+      return;
+    }
 
     const now = Date.now();
     const minIntervalMs = 10000;
@@ -285,8 +427,17 @@
 
     const session = await getValidSession();
     state.authSession = session;
+    if (session?.access_token && loadValidatedUntil()) state.authValidated = true;
     const authStatus = session ? await fetchAuthStatus(session) : { authenticated: false };
-    state.authValidated = Boolean(authStatus?.validated);
+    if (authStatus?.validated === true) {
+      state.authValidated = true;
+      cacheValidatedState(true);
+    } else if (authStatus?.validated === false) {
+      state.authValidated = false;
+      cacheValidatedState(false);
+    } else if (!session?.access_token || !loadValidatedUntil()) {
+      state.authValidated = false;
+    }
 
     if (!opts.retry) state.analysisRetrying = false;
 
@@ -297,6 +448,7 @@
       state.analysisReady = true;
       state.analysisError = "Free limit reached. Log in or subscribe to continue.";
       state.analysisErrorAt = Date.now();
+      state.loadingPhase = "";
       window.FBCO_updateOverlay(vehicle, {
         loading: false,
         ready: true,
@@ -355,6 +507,7 @@
     }, 3500);
 
     const controller = new AbortController();
+    activeAnalyzeController = controller;
     const timeoutId = setTimeout(() => controller.abort(), 35000);
     try {
       const res = await fetch(API_URL, {
@@ -377,6 +530,7 @@
         mileage_miles: vehicle.mileage_miles,
         transmission: vehicle.transmission,
         drivetrain: vehicle.drivetrain,
+        engine: vehicle.engine,
         fuel_type: vehicle.fuel_type,
         exterior_color: vehicle.exterior_color,
         interior_color: vehicle.interior_color,
@@ -407,14 +561,54 @@
         state.analysisErrorAt = Date.now();
         state.analysisReady = true;
         state.analysisRetrying = false;
+        state.analysisLoading = false;
+        state.loadingPhase = "";
         state.nextAnalyzeAt = Date.now() + Math.max(8, retryAfterSeconds) * 1000;
+        window.FBCO_updateOverlay(vehicle, {
+          loading: false,
+          ready: true,
+          error: state.analysisError,
+          data: state.lastAnalysis,
+          loadingText: "",
+          access: buildAccessInfo(state),
+          gated: state.analysisGated
+        });
+        return;
+      }
+      if (res.status === 402) {
+        let msg = "Free limit reached. Log in or subscribe to continue.";
+        try {
+          const body = await res.json();
+          if (typeof body?.error === "string" && body.error.trim()) msg = body.error.trim();
+        } catch {}
+        saveFreeCount(FREE_LIMIT);
+        markFreeQuotaSyncedToday();
+        state.freeCount = loadFreeCount();
+        state.analysisGated = !state.authValidated && state.freeCount >= FREE_LIMIT;
+        state.analysisError = msg;
+        state.analysisErrorAt = Date.now();
+        state.analysisReady = true;
+        state.analysisRetrying = false;
+        state.analysisLoading = false;
+        state.loadingPhase = "";
+        window.FBCO_updateOverlay(vehicle, {
+          loading: false,
+          ready: true,
+          error: state.analysisError,
+          data: state.lastAnalysis,
+          loadingText: "",
+          access: buildAccessInfo(state),
+          gated: state.analysisGated
+        });
         return;
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       const validatedHeader = res.headers.get("X-User-Validated");
+      const freeRemainingHeader = res.headers.get("X-Free-Remaining");
       if (validatedHeader != null) {
         state.authValidated = validatedHeader === "true";
+        cacheValidatedState(state.authValidated);
       }
 
       if (seq !== state.analysisSeq) return;
@@ -422,15 +616,21 @@
       const complete = isCompleteAnalysis(data);
       state.analysisReady = complete;
 
-      const freeCount = loadFreeCount();
-      const lastKey = loadLastFreeKey();
-      if (!state.authValidated && complete) {
+      if (!state.authValidated && Number.isFinite(Number(freeRemainingHeader))) {
+        const remaining = Math.max(0, Math.min(FREE_LIMIT, Number(freeRemainingHeader)));
+        saveFreeCount(FREE_LIMIT - remaining);
+        saveLastFreeKey(key);
+        markFreeQuotaSyncedToday();
+      } else if (!state.authValidated && complete) {
+        // Fallback for older backend responses that don't return X-Free-Remaining.
+        const freeCount = loadFreeCount();
+        const lastKey = loadLastFreeKey();
         if (lastKey !== key) {
           saveFreeCount(freeCount + 1);
           saveLastFreeKey(key);
         }
       }
-      const updatedFree = loadFreeCount();
+      const updatedFree = Math.min(FREE_LIMIT, loadFreeCount());
       state.freeCount = updatedFree;
       state.analysisGated = !state.authValidated && updatedFree >= FREE_LIMIT;
       state.lastAnalyzeAt = Date.now();
@@ -451,15 +651,16 @@
       state.analysisErrorAt = Date.now();
       state.analysisReady = true;
     } finally {
-      if (seq !== state.analysisSeq) return;
-      state.analysisLoading = state.analysisRetrying;
-      if (!state.analysisRetrying) {
-        state.loadingPhase = "";
-      }
       clearTimeout(timeoutId);
       clearTimeout(phaseTimer);
-      window.FBCO_ANALYZE_INFLIGHT = false;
-      if (window.FBCO_ANALYZE_KEY === key) window.FBCO_ANALYZE_KEY = null;
+      if (activeAnalyzeController === controller) activeAnalyzeController = null;
+      if (window.FBCO_ANALYZE_KEY === key) {
+        window.FBCO_ANALYZE_INFLIGHT = false;
+        window.FBCO_ANALYZE_KEY = null;
+      }
+      if (seq !== state.analysisSeq) return;
+      state.analysisLoading = state.analysisRetrying;
+      if (!state.analysisRetrying) state.loadingPhase = "";
       window.FBCO_updateOverlay(vehicle, {
         loading: !state.analysisReady,
         ready: state.analysisReady,
@@ -472,9 +673,41 @@
     }
   }
 
+  function interruptActiveAnalysis(reason = "") {
+    const state = window.FBCO_STATE;
+    if (!state) return;
+
+    if (activeAnalyzeController) {
+      try {
+        activeAnalyzeController.abort();
+      } catch {}
+      activeAnalyzeController = null;
+    }
+
+    state.analysisSeq += 1;
+    state.analysisLoading = false;
+    state.analysisRetrying = false;
+    state.loadingPhase = "";
+    state.analysisRequestedKey = null;
+    state.nextAnalyzeAt = 0;
+    if (reason) {
+      state.analysisError = reason;
+      state.analysisErrorAt = Date.now();
+      state.analysisReady = true;
+    }
+    window.FBCO_ANALYZE_INFLIGHT = false;
+    window.FBCO_ANALYZE_KEY = null;
+  }
+
   function runUpdate() {
     const state = window.FBCO_STATE;
     if (!state) return;
+    if (typeof window.FBCO_extractVehicleSnapshot !== "function" || typeof window.FBCO_updateOverlay !== "function") {
+      setTimeout(() => {
+        if (window.FBCO_STATE && !window.FBCO_STATE.dismissed) scheduleUpdate();
+      }, 300);
+      return;
+    }
 
     if (!isItemPage()) {
       window.FBCO_removeOverlay && window.FBCO_removeOverlay();
@@ -489,17 +722,38 @@
 
     window.FBCO_STATE.loadingPhase = "Parsing listing…";
     let vehicle = window.FBCO_extractVehicleSnapshot();
+    const suppressVehicle = Number(state.suppressVehicleUntil || 0) > Date.now();
 
-    if (state.lastVehicle) {
+    if (!suppressVehicle && state.lastVehicle) {
       const merged = { ...state.lastVehicle };
       Object.entries(vehicle || {}).forEach(([key, value]) => {
         if (value !== null && value !== undefined && value !== "") merged[key] = value;
       });
       vehicle = merged;
     }
+    if (suppressVehicle) {
+      vehicle = {};
+      state.lastVehicle = null;
+    }
 
     if (vehicle?.year && vehicle?.make) {
       state.lastVehicle = vehicle;
+      state.parsePendingSince = null;
+      if (typeof state.analysisError === "string" && state.analysisError.includes("Couldn’t read listing details")) {
+        state.analysisError = null;
+        state.analysisErrorAt = null;
+        state.analysisReady = false;
+      }
+    } else if (!suppressVehicle) {
+      if (!state.parsePendingSince) state.parsePendingSince = Date.now();
+      const parseWaitMs = Date.now() - state.parsePendingSince;
+      if (parseWaitMs > 4500 && !state.analysisLoading) {
+        state.analysisLoading = false;
+        state.analysisReady = true;
+        state.loadingPhase = "";
+        state.analysisError = "Couldn’t read listing details yet. Scroll the listing once, then press Refresh.";
+        state.analysisErrorAt = Date.now();
+      }
     }
 
     const snapshotKey = vehicle ? buildSnapshotKey(vehicle) : null;
@@ -509,6 +763,9 @@
       state.analysisRetryCount = 0;
       state.analysisRetrying = false;
       state.analysisErrorAt = null;
+      state.lastAnalysis = null;
+      state.analysisReady = false;
+      state.analysisRequestedKey = null;
     }
 
     const access = buildAccessInfo(state);
@@ -518,7 +775,8 @@
       error: state.analysisError,
       data: state.lastAnalysis,
       access,
-      gated: state.analysisGated
+      gated: state.analysisGated,
+      clearVehicle: suppressVehicle
     });
     if (renderKey !== state.lastRenderKey) {
       state.lastRenderKey = renderKey;
@@ -529,7 +787,8 @@
         data: state.lastAnalysis,
         loadingText: state.loadingPhase,
         access,
-        gated: state.analysisGated
+        gated: state.analysisGated,
+        clearVehicle: suppressVehicle
       });
     }
 
@@ -538,7 +797,7 @@
       return;
     }
 
-    if (vehicle?.year && vehicle?.make) {
+    if (!suppressVehicle && vehicle?.year && vehicle?.make) {
       if (state.forceAnalysisNext) {
         state.forceAnalysisNext = false;
         requestAnalysis(vehicle, { force: true });
@@ -594,17 +853,38 @@
 
   async function updateAccessState() {
     const state = window.FBCO_STATE;
+    const prevValidated = Boolean(state.authValidated);
+    const prevGated = Boolean(state.analysisGated);
     const session = await getValidSession();
     state.authSession = session;
+    if (session?.access_token && loadValidatedUntil()) state.authValidated = true;
     const authStatus = session ? await fetchAuthStatus(session) : { authenticated: false };
-    state.authValidated = Boolean(authStatus?.validated);
+    if (authStatus?.validated === true) {
+      state.authValidated = true;
+      cacheValidatedState(true);
+    } else if (authStatus?.validated === false) {
+      state.authValidated = false;
+      cacheValidatedState(false);
+    } else if (!session?.access_token || !loadValidatedUntil()) {
+      state.authValidated = false;
+    }
     if (state.authValidated) clearCheckoutPending();
     state.freeCount = loadFreeCount();
     state.analysisGated = !state.authValidated && state.freeCount >= FREE_LIMIT;
+
+    // If access just unlocked, force a fresh analysis on current listing.
+    if (state.authValidated && (!prevValidated || prevGated)) {
+      state.forceAnalysisNext = true;
+      state.analysisRequestedKey = null;
+      state.analysisError = null;
+      state.analysisErrorAt = null;
+      if (!state.lastAnalysis) state.analysisReady = false;
+    }
   }
 
   window.FBCO_authLogin = async function (email, password) {
     const state = window.FBCO_STATE;
+    interruptActiveAnalysis();
     state.authMessage = "Signing in...";
     try {
       const session = await loginWithPassword(email, password);
@@ -614,10 +894,17 @@
       state.authMessage = err?.message || "Unable to sign in.";
     }
     await updateAccessState();
+    // Ensure same-listing re-run after login; avoids stale "empty" analysis cards.
+    state.forceAnalysisNext = true;
+    state.analysisRequestedKey = null;
+    state.analysisError = null;
+    state.analysisErrorAt = null;
+    if (!state.lastAnalysis) state.analysisReady = false;
     scheduleUpdate();
   };
 
   window.FBCO_authLogout = async function () {
+    interruptActiveAnalysis();
     clearAuthSession();
     const state = window.FBCO_STATE;
     state.authSession = null;
@@ -694,13 +981,33 @@
     state.lastRenderKey = null;
     state.lastVehicle = null;
     state.loadingPhase = "Parsing listing…";
+    state.suppressVehicleUntil = Date.now() + NAV_CLEAR_MS;
     runUpdate();
   };
 
-  const scheduleUpdate = window.FBCO_debounce(runUpdate, UPDATE_DEBOUNCE_MS);
+  const scheduleUpdate = debounce(runUpdate, UPDATE_DEBOUNCE_MS);
 
   // Initial run
-  updateAccessState().finally(() => scheduleUpdate());
+  if (isItemPage() && window.FBCO_updateOverlay) {
+    window.FBCO_updateOverlay(
+      {},
+      {
+        loading: true,
+        ready: false,
+        error: null,
+        data: null,
+        loadingText: "Parsing listing…",
+        access: buildAccessInfo(window.FBCO_STATE || {}),
+        gated: Boolean(window.FBCO_STATE?.analysisGated),
+        clearVehicle: true
+      }
+    );
+  }
+  updateAccessState().finally(() => {
+    runUpdate();
+    scheduleUpdate();
+    setTimeout(() => runUpdate(), 700);
+  });
 
   window.addEventListener("pageshow", () => scheduleUpdate());
   document.addEventListener("visibilitychange", () => {
@@ -713,27 +1020,66 @@
 
   // FB is SPA: URL changes
   let lastUrl = location.href;
-  setInterval(() => {
-    if (location.href !== lastUrl) {
-      lastUrl = location.href;
-
-      if (window.FBCO_STATE) {
-        window.FBCO_STATE.forceAnalysisNext = true;
-        window.FBCO_STATE.dismissed = false;
-        window.FBCO_STATE.analysisLoading = false;
-        window.FBCO_STATE.analysisError = null;
-        window.FBCO_STATE.lastSnapshotKey = null;
-        window.FBCO_STATE.analysisRequestedKey = null;
-        window.FBCO_STATE.analysisSeq += 1;
-        window.FBCO_STATE.analysisReady = false;
-        window.FBCO_STATE.lastVehicle = null;
-        window.FBCO_STATE.lastRenderKey = null;
-      }
-
-      window.FBCO_removeOverlay && window.FBCO_removeOverlay();
-      scheduleUpdate();
+  function clearForNavigation() {
+    if (window.FBCO_STATE) {
+      window.FBCO_STATE.forceAnalysisNext = true;
+      window.FBCO_STATE.dismissed = false;
+      window.FBCO_STATE.analysisLoading = false;
+      window.FBCO_STATE.analysisError = null;
+      window.FBCO_STATE.lastSnapshotKey = null;
+      window.FBCO_STATE.analysisRequestedKey = null;
+      window.FBCO_STATE.analysisSeq += 1;
+      window.FBCO_STATE.analysisReady = false;
+      window.FBCO_STATE.lastVehicle = null;
+      window.FBCO_STATE.lastAnalysis = null;
+      window.FBCO_STATE.lastRenderKey = null;
+      window.FBCO_STATE.suppressVehicleUntil = Date.now() + NAV_CLEAR_MS;
+      window.FBCO_STATE.loadingPhase = "Parsing listing…";
     }
-  }, 1000);
+    window.FBCO_removeOverlay && window.FBCO_removeOverlay();
+    if (window.FBCO_updateOverlay) {
+      window.FBCO_updateOverlay(
+        {},
+        {
+          loading: true,
+          ready: false,
+          error: null,
+          data: null,
+          loadingText: "Parsing listing…",
+          access: buildAccessInfo(window.FBCO_STATE || {}),
+          gated: Boolean(window.FBCO_STATE?.analysisGated),
+          clearVehicle: true
+        }
+      );
+    }
+    runUpdate();
+    setTimeout(() => runUpdate(), 250);
+    setTimeout(() => runUpdate(), 900);
+  }
+
+  function onLocationPotentiallyChanged() {
+    if (location.href === lastUrl) return;
+    lastUrl = location.href;
+    clearForNavigation();
+  }
+
+  const originalPushState = history.pushState.bind(history);
+  history.pushState = function (...args) {
+    const out = originalPushState(...args);
+    onLocationPotentiallyChanged();
+    return out;
+  };
+
+  const originalReplaceState = history.replaceState.bind(history);
+  history.replaceState = function (...args) {
+    const out = originalReplaceState(...args);
+    onLocationPotentiallyChanged();
+    return out;
+  };
+
+  window.addEventListener("popstate", onLocationPotentiallyChanged);
+  window.addEventListener("hashchange", onLocationPotentiallyChanged);
+  setInterval(onLocationPotentiallyChanged, 250);
 
   // DOM churn: schedule updates only (cheap)
   const obs = new MutationObserver(() => scheduleUpdate());
