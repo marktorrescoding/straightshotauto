@@ -109,16 +109,33 @@
               <div class="fbco-title-name-row">
                 <div class="fbco-title-name">StraightShot Auto</div>
                 <span id="fbco-subscription-flag" class="fbco-status-flag fbco-status-unsubscribed">Not subscribed</span>
-                <button id="fbco-header-logout" class="fbco-header-logout" type="button">Sign out</button>
               </div>
               <div class="fbco-title-sub" id="fbco-title-sub">Used car snapshot</div>
             </div>
           </div>
           <div class="fbco-actions">
+            <button id="fbco-profile" class="fbco-icon-btn" type="button" aria-label="Profile" title="Profile">👤</button>
             <button id="fbco-refresh" class="fbco-icon-btn" type="button" aria-label="Refresh" title="Refresh">↻</button>
             <button id="fbco-download" class="fbco-icon-btn" type="button" aria-label="Download PDF" title="Download PDF">↓</button>
             <button id="fbco-minimize" class="fbco-icon-btn" type="button" aria-label="Minimize" title="Minimize">–</button>
             <button id="fbco-close" class="fbco-icon-btn" type="button" aria-label="Close" title="Close">×</button>
+          </div>
+          <div id="fbco-auth-popup" class="fbco-auth-popup" hidden>
+            <div class="fbco-auth-popup-head">
+              <span class="fbco-auth-popup-title">Account</span>
+              <button id="fbco-auth-popup-min" class="fbco-icon-btn fbco-auth-popup-min" type="button" aria-label="Collapse account popup" title="Collapse">–</button>
+            </div>
+            <div class="fbco-auth-popup-row">
+              <input id="fbco-auth-email" class="fbco-input" type="email" placeholder="Email" />
+              <input id="fbco-auth-password" class="fbco-input" type="password" placeholder="Password" />
+            </div>
+            <div class="fbco-auth-popup-row">
+              <button id="fbco-auth-login" class="fbco-btn" type="button">Log in</button>
+              <button id="fbco-auth-signup" class="fbco-btn fbco-btn-ghost" type="button">Create account</button>
+              <button id="fbco-auth-subscribe" class="fbco-btn fbco-btn-primary" type="button">Subscribe $3/mo</button>
+              <button id="fbco-auth-logout" class="fbco-btn fbco-btn-ghost" type="button">Sign out</button>
+            </div>
+            <div id="fbco-auth-message" class="fbco-text fbco-muted">—</div>
           </div>
         </div>
 
@@ -168,18 +185,9 @@
 
           <div class="fbco-card fbco-card-access" id="fbco-access-card">
             <div class="fbco-access-row">
-              <div id="fbco-access-status" class="fbco-text">Free analyses remaining: —</div>
+              <div id="fbco-access-status" class="fbco-text">—</div>
               <span id="fbco-access-badge" class="fbco-badge fbco-badge-muted">Free</span>
             </div>
-            <div class="fbco-access-actions">
-              <input id="fbco-auth-email" class="fbco-input" type="email" placeholder="Email" />
-              <input id="fbco-auth-password" class="fbco-input" type="password" placeholder="Password" />
-              <button id="fbco-auth-login" class="fbco-btn" type="button">Log in</button>
-              <button id="fbco-auth-signup" class="fbco-btn fbco-btn-ghost" type="button">Create account</button>
-              <button id="fbco-auth-subscribe" class="fbco-btn fbco-btn-primary" type="button">Subscribe $3/mo</button>
-              <button id="fbco-auth-logout" class="fbco-btn fbco-btn-ghost" type="button">Sign out</button>
-            </div>
-            <div id="fbco-auth-message" class="fbco-text fbco-muted">—</div>
           </div>
 
           <div class="fbco-tags fbco-blurable" id="fbco-analysis-tags"></div>
@@ -401,7 +409,9 @@
       </button>
     `;
 
-    document.body.appendChild(root);
+    const mountTarget = document.body || document.documentElement;
+    if (!mountTarget) return null;
+    mountTarget.appendChild(root);
 
     const titleIcon = root.querySelector("#fbco-title-icon");
     const miniIcon = root.querySelector("#fbco-mini-icon");
@@ -513,7 +523,36 @@
     const signupBtn = root.querySelector("#fbco-auth-signup");
     const subscribeBtn = root.querySelector("#fbco-auth-subscribe");
     const logoutBtn = root.querySelector("#fbco-auth-logout");
-    const headerLogoutBtn = root.querySelector("#fbco-header-logout");
+    const profileBtn = root.querySelector("#fbco-profile");
+    const authPopup = root.querySelector("#fbco-auth-popup");
+    const authPopupMinBtn = root.querySelector("#fbco-auth-popup-min");
+
+    const setAuthPopupOpen = (open) => {
+      if (!authPopup) return;
+      authPopup.hidden = !open;
+      if (profileBtn) profileBtn.classList.toggle("fbco-icon-btn-active", open);
+    };
+    setAuthPopupOpen(false);
+    const onProfileToggle = (e) => {
+      e.stopPropagation();
+      setAuthPopupOpen(Boolean(authPopup?.hidden));
+    };
+    profileBtn?.addEventListener("click", onProfileToggle);
+    if (profileBtn) cleanupFns.push(() => profileBtn.removeEventListener("click", onProfileToggle));
+    const onDocClickClosePopup = (e) => {
+      if (!authPopup || authPopup.hidden) return;
+      const target = e.target;
+      if (authPopup.contains(target) || profileBtn?.contains(target)) return;
+      setAuthPopupOpen(false);
+    };
+    document.addEventListener("click", onDocClickClosePopup, true);
+    cleanupFns.push(() => document.removeEventListener("click", onDocClickClosePopup, true));
+    const onAuthPopupMinimize = (e) => {
+      e.stopPropagation();
+      setAuthPopupOpen(false);
+    };
+    authPopupMinBtn?.addEventListener("click", onAuthPopupMinimize);
+    if (authPopupMinBtn) cleanupFns.push(() => authPopupMinBtn.removeEventListener("click", onAuthPopupMinimize));
 
     const onLogin = (e) => {
       e.stopPropagation();
@@ -551,11 +590,10 @@
     const onLogout = (e) => {
       e.stopPropagation();
       window.FBCO_authLogout && window.FBCO_authLogout();
+      setAuthPopupOpen(false);
     };
     logoutBtn?.addEventListener("click", onLogout);
     if (logoutBtn) cleanupFns.push(() => logoutBtn.removeEventListener("click", onLogout));
-    headerLogoutBtn?.addEventListener("click", onLogout);
-    if (headerLogoutBtn) cleanupFns.push(() => headerLogoutBtn.removeEventListener("click", onLogout));
 
     const accordionToggles = Array.from(root.querySelectorAll(".fbco-accordion-toggle"));
     accordionToggles.forEach((btn) => {
@@ -634,7 +672,13 @@
 
       // If full mode and clicking buttons, don't drag
       if (!loadOverlayState().minimized) {
-        if (e.target && e.target.closest && e.target.closest("button")) return;
+        if (
+          e.target &&
+          e.target.closest &&
+          e.target.closest("button, input, textarea, select, a, label, #fbco-auth-popup")
+        ) {
+          return;
+        }
       }
 
       activeTarget = getDragTarget();
@@ -989,14 +1033,42 @@
     });
   }
 
+  function setBadgeWithInfo(el, label, tip, className) {
+    if (!el) return;
+    const safeLabel = String(label || "").trim();
+    const safeTip = String(tip || "").trim();
+    el.className = className || "fbco-badge fbco-badge-muted";
+    el.innerHTML = "";
+    const text = document.createElement("span");
+    text.textContent = safeLabel;
+    el.appendChild(text);
+    if (safeTip) {
+      const info = document.createElement("span");
+      info.className = "fbco-info";
+      info.tabIndex = 0;
+      info.setAttribute("role", "button");
+      info.setAttribute("aria-label", safeTip);
+      info.setAttribute("data-tip", safeTip);
+      info.textContent = "ⓘ";
+      el.appendChild(info);
+    }
+  }
+
   function scoreLabel(score) {
     if (score == null) return null;
-    if (score < 15) return { label: "No", tone: "no" };
-    if (score < 35) return { label: "Risky", tone: "risky" };
-    if (score < 55) return { label: "Fair", tone: "fair" };
-    if (score < 80) return { label: "Good", tone: "good" };
-    if (score < 92) return { label: "Great", tone: "great" };
-    return { label: "Steal", tone: "steal" };
+    if (score >= 92) return { label: "A+", tone: "good" };
+    if (score >= 88) return { label: "A", tone: "good" };
+    if (score >= 84) return { label: "A-", tone: "good" };
+    if (score >= 79) return { label: "B+", tone: "fair" };
+    if (score >= 75) return { label: "B", tone: "fair" };
+    if (score >= 72) return { label: "B-", tone: "fair" };
+    if (score >= 65) return { label: "C+", tone: "muted" };
+    if (score >= 60) return { label: "C", tone: "muted" };
+    if (score >= 55) return { label: "C-", tone: "muted" };
+    if (score >= 45) return { label: "D+", tone: "risky" };
+    if (score >= 40) return { label: "D", tone: "risky" };
+    if (score >= 35) return { label: "D-", tone: "risky" };
+    return { label: "F", tone: "no" };
   }
 
   window.FBCO_updateOverlay = function (vehicle, analysisState) {
@@ -1114,7 +1186,6 @@
     const authSignupBtn = document.getElementById("fbco-auth-signup");
     const authSubscribeBtn = document.getElementById("fbco-auth-subscribe");
     const authLogoutBtn = document.getElementById("fbco-auth-logout");
-    const headerLogoutBtn = document.getElementById("fbco-header-logout");
 
     const accOverview = document.getElementById("fbco-acc-overview");
     const accUpsides = document.getElementById("fbco-acc-upsides");
@@ -1175,7 +1246,7 @@
     const accessCard = document.getElementById("fbco-access-card");
     const isAuthed = Boolean(access?.authenticated);
     const isValidated = Boolean(access?.validated);
-    setVisible(accessCard, Boolean(gated || !isValidated));
+    setVisible(accessCard, true);
 
     if (authMessageEl) {
       const msg = access?.message || window.FBCO_STATE?.authMessage || "";
@@ -1194,21 +1265,18 @@
     }
     if (accessStatusEl) {
       if (isValidated) {
-        accessStatusEl.textContent = "Unlocked: subscription active.";
-      } else if (gated) {
-        accessStatusEl.textContent = "Free limit reached. Unlock full results below.";
-      } else if (isAuthed) {
-        accessStatusEl.textContent = "Signed in. Subscribe to unlock full results.";
+        accessStatusEl.textContent = "Unlimited";
       } else {
-        accessStatusEl.textContent = `Free analyses remaining: ${access?.freeRemaining ?? "—"} — log in or sign up for unlimited.`;
+        accessStatusEl.textContent =
+          access?.freeRemaining == null ? "Checking free requests..." : `${access.freeRemaining} free requests left`;
       }
     }
     if (accessBadgeEl) {
       if (isValidated) {
-        accessBadgeEl.textContent = "Unlocked";
+        accessBadgeEl.textContent = "Unlimited";
         accessBadgeEl.classList.remove("fbco-badge-muted");
       } else {
-        accessBadgeEl.textContent = isAuthed ? "Signed in" : "Free";
+        accessBadgeEl.textContent = "Free";
         accessBadgeEl.classList.add("fbco-badge-muted");
       }
     }
@@ -1230,10 +1298,6 @@
     if (authLogoutBtn) {
       setVisible(authLogoutBtn, isAuthed);
       authLogoutBtn.disabled = !isAuthed;
-    }
-    if (headerLogoutBtn) {
-      setVisible(headerLogoutBtn, isAuthed);
-      headerLogoutBtn.disabled = !isAuthed;
     }
 
     root.dataset.loading = busy ? "1" : "0";
@@ -1338,46 +1402,60 @@
       : Number.isFinite(confValue)
       ? Math.round(confValue * 100)
       : null;
-    if (Number.isFinite(confValue) && confValue >= 0.45) {
-      if (score != null && score <= 5) {
-        score = Math.round(confValue * 100);
-      } else {
-        const tone = scoreLabel(score)?.tone;
-        if (tone === "no") score = Math.round(confValue * 100);
-      }
-    }
     if (scoreBadgeEl) {
       if (score == null) {
-        scoreBadgeEl.textContent = busy ? "…" : "--";
-        scoreBadgeEl.className = "fbco-badge fbco-badge-muted";
+        setBadgeWithInfo(scoreBadgeEl, busy ? "…" : "--", "", "fbco-badge fbco-badge-muted");
       } else {
         const clamped = Math.min(100, Math.max(0, score));
-        const meta = scoreLabel(clamped);
-        scoreBadgeEl.textContent = `Score ${clamped}`;
-        scoreBadgeEl.className = `fbco-badge fbco-badge-${meta?.tone || "muted"}`;
+        const grade = scoreLabel(clamped);
+        const dealGrade = isMeaningfulText(data?.deal_grade) ? String(data.deal_grade) : grade?.label || "--";
+        setBadgeWithInfo(
+          scoreBadgeEl,
+          `Deal Grade ${dealGrade}`,
+          "Deal Grade reflects how good the asking price is versus estimated fair value, adjusted for listing risk.",
+          "fbco-badge fbco-badge-muted"
+        );
       }
     }
 
     const conf = Number.isFinite(confValue) ? Math.round(confValue * 100) : null;
     if (confidenceBadgeEl) {
-      confidenceBadgeEl.textContent = conf == null ? "Listing evidence --" : `Listing evidence ${conf}%`;
+      setBadgeWithInfo(
+        confidenceBadgeEl,
+        conf == null ? "Listing evidence --" : `Listing evidence ${conf}%`,
+        "Listing evidence measures how much key data was present in the listing (price, mileage, title, VIN, powertrain, etc.).",
+        "fbco-badge fbco-badge-muted"
+      );
     }
 
     if (verdictBadgeEl) {
-      const verdictText = typeof data?.final_verdict === "string" ? data.final_verdict.toLowerCase() : "";
-      if (verdictText.includes("avoid") || verdictText.includes("walk away") || verdictText.includes("high risk")) {
-        verdictBadgeEl.textContent = "Avoid";
-        verdictBadgeEl.className = "fbco-badge fbco-badge-no";
-      } else if (verdictText.includes("conditional") || /(caution|careful|verify|inspection)/i.test(verdictText)) {
-        verdictBadgeEl.textContent = "Conditional buy";
-        verdictBadgeEl.className = "fbco-badge fbco-badge-fair";
-      } else if (verdictText.includes("buy")) {
-        verdictBadgeEl.textContent = "Buy";
-        verdictBadgeEl.className = "fbco-badge fbco-badge-good";
-      } else {
-        verdictBadgeEl.textContent = "Verdict";
-        verdictBadgeEl.className = "fbco-badge fbco-badge-muted";
-      }
+      const riskLevelRaw = isMeaningfulText(data?.risk_level) ? String(data.risk_level) : "";
+      const riskLevel = riskLevelRaw || (score == null
+        ? "Unknown"
+        : score <= 25
+        ? "Very high"
+        : score <= 45
+        ? "High"
+        : score <= 65
+        ? "Moderate"
+        : score <= 80
+        ? "Low to moderate"
+        : "Low");
+      const riskNorm = riskLevel.toLowerCase();
+      const riskClass =
+        riskNorm.includes("very high") || riskNorm === "high"
+          ? "fbco-badge fbco-badge-no"
+          : riskNorm.includes("moderate")
+          ? "fbco-badge fbco-badge-fair"
+          : riskNorm === "low"
+          ? "fbco-badge fbco-badge-good"
+          : "fbco-badge fbco-badge-muted";
+      setBadgeWithInfo(
+        verdictBadgeEl,
+        `Risk ${riskLevel}`,
+        "Risk Level reflects likely ownership/condition risk independent of deal price.",
+        riskClass
+      );
     }
 
     const overviewVisible = busy || repShown || lifespanShown || dailyShown || skillShown || notesShown;

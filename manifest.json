@@ -21,14 +21,14 @@
       "matches": ["https://www.facebook.com/*"]
     }
   ],
-  "permissions": [],
+  "permissions": ["storage"],
   "host_permissions": ["https://www.facebook.com/*", "https://car-bot.car-bot.workers.dev/*"],
   "content_scripts": [
     {
       "matches": ["https://www.facebook.com/marketplace/*"],
       "js": ["src/utils.js", "src/extract.js", "src/overlay.js", "content.js"],
       "css": ["styles.css"],
-      "run_at": "document_idle"
+      "run_at": "document_start"
     },
     {
       "matches": ["https://car-bot.car-bot.workers.dev/auth/callback*"],

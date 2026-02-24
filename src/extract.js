@@ -342,8 +342,9 @@
   function parseTitleStatus(text) {
     if (!text) return null;
 
+    if (/\b(no title|without title|missing title|lost title|can'?t get title)\b/i.test(text)) return "no_title";
     if (/salvage|salvamento/i.test(text)) return "salvage";
-    if (/rebuilt|rebuild|reconstruido/i.test(text)) return "rebuilt";
+    if (/rebuilt|rebuild|reconstructed|reconstruido/i.test(text)) return "rebuilt";
     if (/lien|gravamen/i.test(text)) return "lien";
 
     if (/\bclean\s+title\b/i.test(text)) return "clean_seller_claimed";

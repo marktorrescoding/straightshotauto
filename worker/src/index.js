@@ -18,7 +18,8 @@ const SYSTEM_PROMPT =
   ].join("\n");
 
 const CACHE_TTL_SECONDS = 60 * 60 * 24;
-const CACHE_VERSION = "v8"; // bump to invalidate stale cached analyses after scoring/risk logic changes
+const CACHE_VERSION = "v12"; // bump to invalidate stale cached analyses after deal-context scoring changes
+const FREE_DAILY_LIMIT = 5;
 const RATE_MIN_INTERVAL_MS = 0;
 const RATE_WINDOW_MS = 60 * 60 * 1000;
 const RATE_MAX_REQUESTS = 120;
@@ -100,6 +101,85 @@ function checkRateLimit(ip) {
   entry.recent.push(now);
   rateState.set(ip, entry);
   return { ok: true };
+}
+
+function utcDayStampNow() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function parseFreeUsageRecord(raw) {
+  if (!raw) return { count: 0, seen_snapshot_keys: [] };
+  try {
+    const parsed = JSON.parse(raw);
+    const count = Number.isFinite(Number(parsed?.count)) ? Math.max(0, Number(parsed.count)) : 0;
+    const seen = Array.isArray(parsed?.seen_snapshot_keys)
+      ? parsed.seen_snapshot_keys.map((x) => String(x || "")).filter(Boolean).slice(0, 100)
+      : [];
+    return { count, seen_snapshot_keys: seen };
+  } catch {
+    return { count: 0, seen_snapshot_keys: [] };
+  }
+}
+
+async function consumeFreeAnalysisSlot(request, cache, snapshotKey) {
+  const ip = getClientIp(request);
+  const ua = (request.headers.get("User-Agent") || "").slice(0, 180);
+  const bucketSource = `${utcDayStampNow()}|${ip}|${ua}`;
+  const bucketHash = await hashString(bucketSource);
+  const usageReq = new Request(`https://quota.car-bot.local/free/${bucketHash}`);
+
+  const existing = await cache.match(usageReq);
+  const record = parseFreeUsageRecord(existing ? await existing.text() : "");
+
+  if (record.seen_snapshot_keys.includes(snapshotKey)) {
+    return { ok: true, remaining: Math.max(0, FREE_DAILY_LIMIT - record.count), count: record.count };
+  }
+
+  if (record.count >= FREE_DAILY_LIMIT) {
+    return { ok: false, remaining: 0, count: record.count };
+  }
+
+  const nextCount = record.count + 1;
+  const seenSet = new Set(record.seen_snapshot_keys);
+  seenSet.add(snapshotKey);
+  const nextRecord = {
+    count: nextCount,
+    seen_snapshot_keys: Array.from(seenSet).slice(-100)
+  };
+
+  await cache.put(
+    usageReq,
+    new Response(JSON.stringify(nextRecord), {
+      headers: {
+        "Content-Type": "application/json",
+        "Cache-Control": "public, max-age=172800"
+      }
+    })
+  );
+
+  return { ok: true, remaining: Math.max(0, FREE_DAILY_LIMIT - nextCount), count: nextCount };
+}
+
+function freeLimitResponse(origin, requestId, snapshotKey) {
+  return new Response(
+    JSON.stringify({
+      error: "Free limit reached. Log in or subscribe to continue.",
+      code: "free_limit_reached",
+      free_limit: FREE_DAILY_LIMIT,
+      free_remaining: 0
+    }),
+    {
+      status: 402,
+      headers: {
+        "Content-Type": "application/json",
+        ...corsHeaders(origin),
+        "X-Request-Id": requestId,
+        "X-Snapshot-Key": snapshotKey.slice(0, 12),
+        "X-User-Validated": "false",
+        "X-Free-Remaining": "0"
+      }
+    }
+  );
 }
 
 async function hashString(input) {
@@ -187,6 +267,32 @@ function verdictFromScore(score) {
   if (score <= 71) return "👍 Good";
   if (score <= 87) return "💎 Great";
   return "🚀 Steal";
+}
+
+function letterGradeFromScore(score) {
+  if (!Number.isFinite(score)) return "N/A";
+  if (score >= 92) return "A+";
+  if (score >= 88) return "A";
+  if (score >= 84) return "A-";
+  if (score >= 79) return "B+";
+  if (score >= 75) return "B";
+  if (score >= 72) return "B-";
+  if (score >= 65) return "C+";
+  if (score >= 60) return "C";
+  if (score >= 55) return "C-";
+  if (score >= 45) return "D+";
+  if (score >= 40) return "D";
+  if (score >= 35) return "D-";
+  return "F";
+}
+
+function riskLevelFromScore(score) {
+  if (!Number.isFinite(score)) return "Unknown";
+  if (score <= 25) return "Very high";
+  if (score <= 45) return "High";
+  if (score <= 65) return "Moderate";
+  if (score <= 80) return "Low to moderate";
+  return "Low";
 }
 
 function normalizeText(value) {
@@ -411,7 +517,6 @@ function computeHeuristicDecisionScore(snapshot, out) {
   let score = 68;
   const miles = asNumber(snapshot?.mileage_miles, null);
   const title = deriveTitleStatus(snapshot);
-  const ask = asNumber(snapshot?.price_usd, null);
   const hasVin = hasKnownValue(snapshot?.vin);
   const hasRecords = Boolean(detectRecordsClaim(snapshot));
   const drive = inferredDrivetrain(snapshot);
@@ -420,7 +525,7 @@ function computeHeuristicDecisionScore(snapshot, out) {
   if (Number.isFinite(miles)) {
     if (miles >= 250000) score -= 20;
     else if (miles >= 200000) score -= 15;
-    else if (miles >= 160000) score -= 10;
+    else if (miles >= 160000) score -= 8;
     else if (miles >= 120000) score -= 6;
     else if (miles <= 60000) score += 6;
   } else {
@@ -428,34 +533,16 @@ function computeHeuristicDecisionScore(snapshot, out) {
   }
 
   if (title === "unknown") score -= 6;
+  if (title === "no_title") score -= 35;
   if (title === "lien") score -= 8;
   if (title === "rebuilt") score -= 18;
-  if (!hasVin) score -= 5;
-  if (!drive) score -= 4;
+  if (title === "clean") score += 2;
+  if (!hasVin) score -= 2;
+  if (!drive) score -= 2;
   if (hasRecords) score += 4;
   if (modified) score -= 3;
 
-  // Respect deterministic valuation signal if available.
-  const market = asString(out?.market_value_estimate, "");
-  const overMatch = market.match(/Fair value band:\s*\$[\d,]+–\$(\d[\d,]*)/i);
-  const fairHigh = overMatch ? Number(overMatch[1].replace(/,/g, "")) : null;
-  if (Number.isFinite(ask) && Number.isFinite(fairHigh) && fairHigh > 0) {
-    const overPct = (ask - fairHigh) / fairHigh;
-    if (overPct > 0.2) score -= 12;
-    else if (overPct > 0.12) score -= 8;
-    else if (overPct > 0.05) score -= 5;
-  }
-
   return clamp(Math.round(score), 0, 100);
-}
-
-function enforceScoreEvidenceSeparation(score, confidence, minGap = 4) {
-  if (!Number.isFinite(score)) return clamp(asNumber(confidence, 0.5), 0, 1);
-  let pct = Math.round(clamp(asNumber(confidence, 0.5), 0, 1) * 100);
-  if (Math.abs(score - pct) >= minGap) return pct / 100;
-  if (pct <= score) pct = Math.max(0, score - minGap);
-  else pct = Math.min(100, score + minGap);
-  return pct / 100;
 }
 
 function getAuthToken(request) {
@@ -634,8 +721,20 @@ async function verifyStripeSignature(payload, signatureHeader, secret) {
 }
 
 function deriveTitleStatus(snapshot) {
-  const explicit = snapshot?.title_status;
-  if (explicit) return normalizeText(explicit);
+  const explicit = normalizeText(snapshot?.title_status);
+  const text = sourceBlob(snapshot);
+  if (explicit) {
+    if (explicit.includes("no_title")) return "no_title";
+    if (explicit.includes("clean")) return "clean";
+    if (explicit.includes("salvage")) return "salvage";
+    if (explicit.includes("rebuilt") || explicit.includes("rebuild")) return "rebuilt";
+    if (explicit.includes("lien")) return "lien";
+    if (explicit.includes("unknown")) return "unknown";
+    return explicit;
+  }
+  if (/\b(no title|without title|missing title|lost title|cant get title|can'?t get title)\b/i.test(text)) {
+    return "no_title";
+  }
   return "unknown";
 }
 
@@ -787,7 +886,6 @@ function applyExtremeMileageCaps(out, snapshot) {
   const miles = Number(snapshot?.mileage_miles);
   if (!Number.isFinite(miles) || miles < 250000) return;
   const hasRecords = hasServiceRecordsClaim(snapshot);
-  if (!hasRecords && out.confidence > 0.75) out.confidence = 0.75;
   if (!(hasRecords && out.confidence >= 0.85) && out.overall_score > 45) {
     out.overall_score = 45;
   }
@@ -1560,21 +1658,94 @@ function ensureSpecificMaintenance(out, snapshot) {
   out.expected_maintenance_near_term = asArray(out.expected_maintenance_near_term).slice(0, 6);
 }
 
-function normalizeVerdictTone(out) {
+function normalizeVerdictTone(out, snapshot) {
   const score = asNumber(out?.overall_score, null);
   if (!Number.isFinite(score)) return;
 
-  const map = {
-    risky: "High risk — likely pass unless steep discount and clean inspection.",
-    fair: "Conditional buy — proceed only after inspection and records verification.",
-    good: "Conditional buy — good candidate if records and inspection check out.",
-    great: "Buy candidate — confirm records, VIN history, and clean inspection.",
-    steal: "Strong buy candidate — still verify records, VIN history, and inspection."
-  };
+  const grade = letterGradeFromScore(score);
+  const title = deriveTitleStatus(snapshot);
+  const hasVin = hasKnownValue(snapshot?.vin);
+  const hasDrive = hasKnownValue(inferredDrivetrain(snapshot));
+  const miles = asNumber(snapshot?.mileage_miles, null);
+  const reasons = [];
+  if (Number.isFinite(miles) && miles >= 200000) reasons.push(`very high mileage (${Math.round(miles).toLocaleString("en-US")} mi)`);
+  else if (Number.isFinite(miles) && miles >= 150000) reasons.push(`high mileage (${Math.round(miles).toLocaleString("en-US")} mi)`);
+  if (title === "no_title") reasons.push("no title is disclosed");
+  else if (title === "rebuilt") reasons.push("rebuilt title risk");
+  else if (title === "lien") reasons.push("lien/title transfer risk");
 
-  const tone =
-    score <= 34 ? "risky" : score <= 54 ? "fair" : score <= 79 ? "good" : score <= 91 ? "great" : "steal";
-  out.final_verdict = map[tone];
+  const priceOpinion = asString(out?.price_opinion, "");
+  const above = priceOpinion.match(/above fair range by about (\$[\d,]+)/i);
+  const below = priceOpinion.match(/below fair range by about (\$[\d,]+)/i);
+  const overAsk = priceOpinion.match(/over ask by about (\$[\d,]+)/i);
+  const nearFair = /near fair range/i.test(priceOpinion);
+  if (above) reasons.push(`asking is above fair value by about ${above[1]}`);
+  else if (overAsk) reasons.push(`asking is above target by about ${overAsk[1]}`);
+
+  const uncertainty = [];
+  if (title === "unknown") uncertainty.push("title is unverified");
+  if (!hasVin) uncertainty.push("VIN is missing");
+  if (!hasDrive) uncertainty.push("drivetrain is unconfirmed");
+
+  const primary = reasons.slice(0, 2);
+  if (!primary.length) primary.push("overall listing risk and condition uncertainty");
+  const reasonText = `Grade ${grade} reflects ${primary.join(" and ")}.`;
+
+  let priceText = "Price view: asking appears within the estimated fair range.";
+  if (above) priceText = `Price view: asking is above fair value by about ${above[1]}.`;
+  else if (below) priceText = `Price view: asking is below fair value by about ${below[1]}.`;
+  else if (overAsk) priceText = `Price view: asking is slightly above target by about ${overAsk[1]}.`;
+  else if (nearFair) priceText = "Price view: asking is near the estimated fair range.";
+
+  const uncertaintyText = uncertainty.length ? ` Missing info: ${uncertainty.join("; ")}.` : "";
+
+  let actionText = "Conditional buy — proceed only after inspection and records verification.";
+  if (score <= 34) actionText = "High risk — likely pass unless steep discount and clean inspection.";
+  else if (score >= 80) actionText = "Buy candidate — still verify VIN/history and inspection.";
+  else if (score >= 60) actionText = "Conditional buy — reasonable candidate if inspection and history check out.";
+
+  out.final_verdict = `${reasonText} ${priceText}${uncertaintyText} ${actionText}`;
+}
+
+function buildDeterministicSummary(out, snapshot) {
+  const year = snapshot?.year;
+  const make = asString(snapshot?.make, "").toUpperCase();
+  const model = asString(snapshot?.model, "").toUpperCase();
+  const ask = asNumber(snapshot?.price_usd, null);
+  const miles = asNumber(snapshot?.mileage_miles, null);
+  const title = deriveTitleStatus(snapshot);
+  const band = computeValuationBand(snapshot, out);
+
+  const subject = [year, make, model].filter(Boolean).join(" ").trim() || "This vehicle";
+  const facts = `${subject} is listed at ${formatUsdWhole(ask)} with ${
+    Number.isFinite(miles) ? `${Math.round(miles).toLocaleString("en-US")} miles` : "unknown mileage"
+  }${title === "clean" ? " and seller-claimed clean title" : ""}.`;
+
+  let priceLine = "Pricing appears in line with the estimated range.";
+  if (band) {
+    if (ask > band.fair_high) {
+      priceLine = `Asking price is above estimated fair value by about ${formatUsdWhole(ask - band.fair_high)}.`;
+    } else if (ask < band.fair_low) {
+      priceLine = `Asking price is below estimated fair value by about ${formatUsdWhole(band.fair_low - ask)}.`;
+    } else {
+      priceLine = `Asking price is within estimated fair range (${formatUsdWhole(band.fair_low)}-${formatUsdWhole(
+        band.fair_high
+      )}).`;
+    }
+  }
+
+  const expectations = [];
+  if (Number.isFinite(miles) && miles >= 150000) expectations.push("expect higher wear-item and drivetrain maintenance risk");
+  else if (Number.isFinite(miles) && miles <= 60000) expectations.push("mileage is favorable for age");
+  if (!hasKnownValue(snapshot?.vin)) expectations.push("verify VIN/history before committing");
+  if (!hasKnownValue(inferredDrivetrain(snapshot))) expectations.push("confirm drivetrain to avoid ownership mismatch");
+  if (!snapshot?.seller_description) expectations.push("listing notes are sparse, so inspection carries more weight");
+
+  const expectationLine = expectations.length
+    ? `Buyer expectation: ${expectations.slice(0, 2).join("; ")}.`
+    : "Buyer expectation: confirm maintenance records and inspection results before purchase.";
+
+  out.summary = `${facts} ${priceLine} ${expectationLine}`;
 }
 
 function formatUsdWhole(n) {
@@ -1589,12 +1760,29 @@ function hasHeavyModificationSignals(snapshot) {
   );
 }
 
+function marketRetentionAdjustment(snapshot) {
+  const make = normalizeText(snapshot?.make);
+  const model = normalizeText(snapshot?.model);
+
+  // Negative values reduce discount (stronger resale retention).
+  if (make === "toyota" || make === "lexus") {
+    if (/(rav4|4runner|tacoma|tundra|sequoia|gx|rx|highlander)/.test(model)) return -0.03;
+    return -0.02;
+  }
+  if (make === "honda" || make === "acura") {
+    if (/(cr-v|crv|pilot|ridgeline|mdx|rdx)/.test(model)) return -0.02;
+    return -0.01;
+  }
+  if (make === "mazda" || make === "subaru") return -0.01;
+  if (make === "jeep" && /(liberty|compass|patriot)/.test(model)) return 0.01;
+  return 0;
+}
+
 function computeValuationBand(snapshot, out) {
   const ask = asNumber(snapshot?.price_usd, null);
   if (!Number.isFinite(ask) || ask <= 0) return null;
 
   const miles = asNumber(snapshot?.mileage_miles, null);
-  const score = asNumber(out?.overall_score, 50);
   const conf = clamp(asNumber(out?.confidence, 0.5), 0, 1);
   const titleStatus = deriveTitleStatus(snapshot);
   const hasVin = hasKnownValue(snapshot?.vin);
@@ -1602,43 +1790,39 @@ function computeValuationBand(snapshot, out) {
   const drive = inferredDrivetrain(snapshot);
   const trans = inferredTransmission(snapshot);
   const engine = inferredEngine(snapshot);
+  const retentionAdj = marketRetentionAdjustment(snapshot);
 
   let discount = 0;
 
   if (Number.isFinite(miles)) {
-    if (miles >= 250000) discount += 0.22;
-    else if (miles >= 200000) discount += 0.15;
-    else if (miles >= 160000) discount += 0.1;
-    else if (miles >= 120000) discount += 0.06;
-    else if (miles >= 90000) discount += 0.03;
+    if (miles >= 250000) discount += 0.14;
+    else if (miles >= 200000) discount += 0.1;
+    else if (miles >= 160000) discount += 0.07;
+    else if (miles >= 120000) discount += 0.04;
+    else if (miles >= 90000) discount += 0.02;
   } else {
-    discount += 0.05;
+    discount += 0.02;
   }
-
-  if (score <= 34) discount += 0.12;
-  else if (score <= 54) discount += 0.07;
-  else if (score <= 71) discount += 0.03;
-  else if (score >= 88) discount -= 0.02;
-
-  if (conf < 0.45) discount += 0.06;
-  else if (conf < 0.6) discount += 0.03;
-  else if (conf > 0.85) discount -= 0.01;
 
   if (titleStatus === "unknown") discount += 0.05;
   else if (titleStatus === "lien") discount += 0.09;
   else if (titleStatus === "rebuilt") discount += 0.2;
+  else if (titleStatus === "no_title") discount += 0.35;
 
-  if (!drive) discount += 0.03;
-  if (!trans) discount += 0.02;
-  if (!engine) discount += 0.02;
-  if (!snapshot?.seller_description) discount += 0.03;
-  if (!hasVin) discount += 0.03;
-  if (modified) discount += 0.05;
+  if (!drive) discount += 0.01;
+  if (!trans) discount += 0.005;
+  if (!engine) discount += 0.005;
+  if (!snapshot?.seller_description) discount += 0.015;
+  if (!hasVin) discount += 0.01;
+  if (modified) discount += 0.02;
 
-  discount = clamp(discount, -0.08, 0.45);
+  discount += retentionAdj;
+
+  const discountCap = titleStatus === "no_title" ? 0.6 : 0.28;
+  discount = clamp(discount, -0.08, discountCap);
 
   const fairMid = Math.max(500, Math.round(ask * (1 - discount)));
-  const spreadPct = clamp(0.06 + (1 - conf) * 0.08 + (modified ? 0.01 : 0), 0.05, 0.14);
+  const spreadPct = clamp(0.07 + (1 - conf) * 0.06 + (modified ? 0.01 : 0), 0.06, 0.13);
   const spread = Math.max(500, Math.round(fairMid * spreadPct));
   const fairLow = Math.max(500, fairMid - spread);
   const fairHigh = Math.max(fairLow, fairMid + spread);
@@ -1671,12 +1855,29 @@ function applyDeterministicValuationBand(out, snapshot) {
     ask
   )} is ${priceCall}.`;
 
-  // Keep score aligned with pricing reality: steep overpricing should reduce decision score.
+  if (!Number.isFinite(out.overall_score)) return;
+
+  // Deal-context scoring: grade should reflect how good/bad the listing price is.
   const overPct = band.fair_high > 0 ? (ask - band.fair_high) / band.fair_high : 0;
-  if (overPct > 0.05 && Number.isFinite(out.overall_score)) {
-    const penalty = overPct >= 0.2 ? 12 : overPct >= 0.12 ? 8 : 5;
-    out.overall_score = clamp(Math.round(out.overall_score - penalty), 0, 100);
+  const underPct = band.fair_low > 0 ? (band.fair_low - ask) / band.fair_low : 0;
+
+  let delta = 0;
+  if (underPct > 0) {
+    if (underPct >= 0.4) delta += 30;
+    else if (underPct >= 0.25) delta += 22;
+    else if (underPct >= 0.15) delta += 15;
+    else if (underPct >= 0.08) delta += 9;
+    else if (underPct >= 0.03) delta += 4;
+  } else if (overPct > 0) {
+    if (overPct >= 0.3) delta -= 20;
+    else if (overPct >= 0.2) delta -= 14;
+    else if (overPct >= 0.12) delta -= 9;
+    else if (overPct >= 0.05) delta -= 5;
+    else if (overPct >= 0.02) delta -= 2;
   }
+
+  out.deal_adjustment = delta;
+  out.overall_score = clamp(Math.round(out.overall_score + delta), 0, 100);
 }
 
 /**
@@ -1733,12 +1934,13 @@ function coerceAndFill(raw, snapshot) {
   const evidenceCoverage = computeEvidenceCoverage(snapshot);
   out.confidence = clamp(evidenceCoverage, 0, 1);
 
-  // Score: prefer model score; if missing, fall back to heuristic decision score (not confidence).
-  let score = asNumber(raw.overall_score, null);
-  if (score == null) score = computeHeuristicDecisionScore(snapshot, out);
+  // Score: use deterministic heuristic so grade/verdict behavior is stable and explainable.
+  const heuristicScore = computeHeuristicDecisionScore(snapshot, out);
+  let score = heuristicScore;
+  if (deriveTitleStatus(snapshot) === "no_title") score = Math.min(score, 24);
   score = clamp(Math.round(score), 0, 100);
+  out.risk_score_base = score;
   out.overall_score = score;
-  out.confidence = enforceScoreEvidenceSeparation(out.overall_score, out.confidence, 4);
 
   out.final_verdict = asString(raw.final_verdict);
 
@@ -1782,7 +1984,10 @@ function coerceAndFill(raw, snapshot) {
   applyExtremeMileageCaps(out, snapshot);
   enforceFactConsistency(out, snapshot);
   applyDeterministicValuationBand(out, snapshot);
-  normalizeVerdictTone(out);
+  buildDeterministicSummary(out, snapshot);
+  out.deal_grade = letterGradeFromScore(out.overall_score);
+  out.risk_level = riskLevelFromScore(asNumber(out.risk_score_base, out.overall_score));
+  normalizeVerdictTone(out, snapshot);
 
   return out;
 }
@@ -2234,24 +2439,38 @@ export default {
 
       const cached = await cache.match(cacheKey);
       if (cached) {
+        let freeQuota = null;
+        if (!authValidated) {
+          freeQuota = await consumeFreeAnalysisSlot(request, cache, snapshotKey);
+          if (!freeQuota.ok) return freeLimitResponse(origin, requestId, snapshotKey);
+        }
         const withCors = new Response(cached.body, cached);
         withCors.headers.set("Access-Control-Allow-Origin", origin || "*");
         withCors.headers.set("X-Cache", "HIT");
         withCors.headers.set("X-Dedupe", "CACHE_HIT");
         withCors.headers.set("X-Request-Id", requestId);
         withCors.headers.set("X-Snapshot-Key", snapshotKey.slice(0, 12));
+        withCors.headers.set("X-User-Validated", authValidated ? "true" : "false");
+        if (!authValidated && freeQuota) withCors.headers.set("X-Free-Remaining", String(freeQuota.remaining));
         return withCors;
       }
 
       return await dedupe(snapshotKey, async () => {
         const cached2 = await cache.match(cacheKey);
         if (cached2) {
+          let freeQuota = null;
+          if (!authValidated) {
+            freeQuota = await consumeFreeAnalysisSlot(request, cache, snapshotKey);
+            if (!freeQuota.ok) return freeLimitResponse(origin, requestId, snapshotKey);
+          }
           const withCors = new Response(cached2.body, cached2);
           withCors.headers.set("Access-Control-Allow-Origin", origin || "*");
           withCors.headers.set("X-Cache", "HIT");
           withCors.headers.set("X-Dedupe", "LOCK_HIT");
           withCors.headers.set("X-Request-Id", requestId);
           withCors.headers.set("X-Snapshot-Key", snapshotKey.slice(0, 12));
+          withCors.headers.set("X-User-Validated", authValidated ? "true" : "false");
+          if (!authValidated && freeQuota) withCors.headers.set("X-Free-Remaining", String(freeQuota.remaining));
           return withCors;
         }
 
@@ -2388,12 +2607,18 @@ export default {
         }
 
         const final = coerceAndFill(parsed, snapshot);
+        let freeQuota = null;
+        if (!authValidated) {
+          freeQuota = await consumeFreeAnalysisSlot(request, cache, snapshotKey);
+          if (!freeQuota.ok) return freeLimitResponse(origin, requestId, snapshotKey);
+        }
         const res = jsonResponse(final, origin, 200);
         res.headers.set("X-Cache", "MISS");
         res.headers.set("X-Dedupe", "LOCK_MISS");
         res.headers.set("X-Request-Id", requestId);
         res.headers.set("X-Snapshot-Key", snapshotKey.slice(0, 12));
         res.headers.set("X-User-Validated", authValidated ? "true" : "false");
+        if (!authValidated && freeQuota) res.headers.set("X-Free-Remaining", String(freeQuota.remaining));
         if (authUser?.id) res.headers.set("X-User-Id", authUser.id);
 
         ctx?.waitUntil?.(cache.put(cacheKey, res.clone()));
