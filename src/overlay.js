@@ -106,12 +106,16 @@
           <div class="fbco-title">
             <img id="fbco-title-icon" class="fbco-title-icon" alt="StraightShot Auto" />
             <div class="fbco-title-text">
-              <div class="fbco-title-name">StraightShot Auto</div>
+              <div class="fbco-title-name-row">
+                <div class="fbco-title-name">StraightShot Auto</div>
+                <span id="fbco-subscription-flag" class="fbco-status-flag fbco-status-unsubscribed">Not subscribed</span>
+              </div>
               <div class="fbco-title-sub" id="fbco-title-sub">Used car snapshot</div>
             </div>
           </div>
           <div class="fbco-actions">
             <button id="fbco-refresh" class="fbco-icon-btn" type="button" aria-label="Refresh" title="Refresh">↻</button>
+            <button id="fbco-download" class="fbco-icon-btn" type="button" aria-label="Download PDF" title="Download PDF">↓</button>
             <button id="fbco-minimize" class="fbco-icon-btn" type="button" aria-label="Minimize" title="Minimize">–</button>
             <button id="fbco-close" class="fbco-icon-btn" type="button" aria-label="Close" title="Close">×</button>
           </div>
@@ -128,7 +132,7 @@
           <div class="fbco-card fbco-card-primary" id="fbco-summary-card">
             <div class="fbco-card-header">
               <div class="fbco-vehicle-title" id="fbco-vehicle-title">—</div>
-              <div class="fbco-badges">
+              <div class="fbco-badges fbco-blurable">
                 <span id="fbco-score-badge" class="fbco-badge">--</span>
                 <span id="fbco-confidence-badge" class="fbco-badge fbco-badge-muted">--</span>
                 <span id="fbco-verdict-badge" class="fbco-badge fbco-badge-muted">Verdict</span>
@@ -494,6 +498,14 @@
     refreshBtn?.addEventListener("click", onRefresh);
     if (refreshBtn) cleanupFns.push(() => refreshBtn.removeEventListener("click", onRefresh));
 
+    const downloadBtn = root.querySelector("#fbco-download");
+    const onDownload = (e) => {
+      e.stopPropagation();
+      window.FBCO_downloadReportPdf && window.FBCO_downloadReportPdf();
+    };
+    downloadBtn?.addEventListener("click", onDownload);
+    if (downloadBtn) cleanupFns.push(() => downloadBtn.removeEventListener("click", onDownload));
+
     const emailInput = root.querySelector("#fbco-auth-email");
     const passwordInput = root.querySelector("#fbco-auth-password");
     const loginBtn = root.querySelector("#fbco-auth-login");
@@ -736,6 +748,68 @@
     return () => clearInterval(intervalId);
   }
 
+  window.FBCO_downloadReportPdf = function () {
+    const root = document.getElementById(overlayId);
+    if (!root) return;
+
+    const runtime = globalThis.chrome?.runtime || globalThis.browser?.runtime;
+    const cssHref = runtime?.getURL ? runtime.getURL("styles.css") : "";
+    const clone = root.cloneNode(true);
+    clone.style.position = "static";
+    clone.style.inset = "auto";
+    clone.style.left = "auto";
+    clone.style.right = "auto";
+    clone.style.top = "auto";
+    clone.style.width = `${Math.max(360, Math.round(root.getBoundingClientRect().width))}px`;
+    clone.style.height = "auto";
+    clone.style.maxHeight = "none";
+    clone.style.resize = "none";
+    clone.style.overflow = "visible";
+    clone.querySelectorAll(".fbco-accordion").forEach((acc) => {
+      acc.style.display = "";
+    });
+    clone.querySelectorAll(".fbco-accordion-body").forEach((body) => {
+      body.hidden = false;
+      body.style.display = "";
+    });
+    clone.querySelectorAll(".fbco-accordion-toggle").forEach((btn) => {
+      btn.setAttribute("aria-expanded", "true");
+      const icon = btn.querySelector(".fbco-accordion-icon");
+      if (icon) icon.textContent = "▴";
+    });
+
+    const printableHtml = `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>StraightShot Auto Report</title>
+    ${cssHref ? `<link rel="stylesheet" href="${cssHref}" />` : ""}
+    <style>
+      html, body { margin: 0; padding: 0; background: #ffffff; }
+      body { padding: 16px; display: flex; justify-content: center; }
+      #fb-car-overlay-mvp { box-shadow: none !important; border-radius: 12px !important; }
+      #fb-car-overlay-mvp .fbco-actions { display: none !important; }
+      @page { margin: 10mm; size: auto; }
+    </style>
+  </head>
+  <body>
+    ${clone.outerHTML}
+    <script>
+      window.addEventListener('load', function () {
+        setTimeout(function () { window.print(); }, 120);
+      });
+      window.addEventListener('afterprint', function () { window.close(); });
+    </script>
+  </body>
+</html>`;
+
+    const printWin = window.open("about:blank", "_blank", "width=1000,height=900");
+    if (!printWin) return;
+    printWin.document.open();
+    printWin.document.write(printableHtml);
+    printWin.document.close();
+  };
+
 
   function stringifyIssue(issue) {
     if (!issue) return null;
@@ -950,7 +1024,9 @@
 
     const loading = analysisState?.loading;
     const error = analysisState?.error;
-    const data = analysisState?.data;
+    const clearVehicle = Boolean(analysisState?.clearVehicle);
+    const vehicleData = clearVehicle ? {} : vehicle || {};
+    const data = clearVehicle ? null : analysisState?.data;
     const loadingText = analysisState?.loadingText;
     const ready = analysisState?.ready;
     const access = analysisState?.access;
@@ -1006,6 +1082,7 @@
     const skillBlock = document.getElementById("fbco-kv-skill");
     const accessStatusEl = document.getElementById("fbco-access-status");
     const accessBadgeEl = document.getElementById("fbco-access-badge");
+    const subscriptionFlagEl = document.getElementById("fbco-subscription-flag");
     const authMessageEl = document.getElementById("fbco-auth-message");
     const authEmailEl = document.getElementById("fbco-auth-email");
     const authPasswordEl = document.getElementById("fbco-auth-password");
@@ -1026,59 +1103,70 @@
     const accMarket = document.getElementById("fbco-acc-market");
     const accDetails = document.getElementById("fbco-acc-details");
 
-    setText(parsedValEl, vehicle.normalized, null, { loading: busy, preserveOnLoading: true });
-    setText(rawValEl, vehicle.source_text, null, { loading: busy, preserveOnLoading: true });
-    setText(priceValEl, window.FBCO_formatUSD(vehicle.price_usd) || "", null, {
+    setText(parsedValEl, vehicleData.normalized, null, { loading: busy, preserveOnLoading: !clearVehicle });
+    setText(rawValEl, vehicleData.source_text, null, { loading: busy, preserveOnLoading: !clearVehicle });
+    setText(priceValEl, window.FBCO_formatUSD(vehicleData.price_usd) || "", null, {
       loading: busy,
-      preserveOnLoading: true
+      preserveOnLoading: !clearVehicle
     });
-    setText(mileageValEl, window.FBCO_formatMiles(vehicle.mileage_miles) || "", null, {
+    setText(mileageValEl, window.FBCO_formatMiles(vehicleData.mileage_miles) || "", null, {
       loading: busy,
-      preserveOnLoading: true
+      preserveOnLoading: !clearVehicle
     });
-    setText(transmissionEl, vehicle.transmission, null, { loading: busy, preserveOnLoading: true });
-    setText(drivetrainEl, vehicle.drivetrain, null, { loading: busy, preserveOnLoading: true });
-    setText(fuelEl, vehicle.fuel_type, null, { loading: busy, preserveOnLoading: true });
-    setText(colorsEl, [vehicle.exterior_color, vehicle.interior_color].filter(Boolean).join(" / "), null, {
+    setText(transmissionEl, vehicleData.transmission, null, { loading: busy, preserveOnLoading: !clearVehicle });
+    setText(drivetrainEl, vehicleData.drivetrain, null, { loading: busy, preserveOnLoading: !clearVehicle });
+    setText(fuelEl, vehicleData.fuel_type, null, { loading: busy, preserveOnLoading: !clearVehicle });
+    setText(colorsEl, [vehicleData.exterior_color, vehicleData.interior_color].filter(Boolean).join(" / "), null, {
       loading: busy,
-      preserveOnLoading: true
+      preserveOnLoading: !clearVehicle
     });
     setText(
       mpgEl,
       [
-        vehicle.mpg_city != null ? `${vehicle.mpg_city} city` : "",
-        vehicle.mpg_highway != null ? `${vehicle.mpg_highway} hwy` : "",
-        vehicle.mpg_combined != null ? `${vehicle.mpg_combined} comb` : ""
+        vehicleData.mpg_city != null ? `${vehicleData.mpg_city} city` : "",
+        vehicleData.mpg_highway != null ? `${vehicleData.mpg_highway} hwy` : "",
+        vehicleData.mpg_combined != null ? `${vehicleData.mpg_combined} comb` : ""
       ]
         .filter(Boolean)
         .join(" · "),
       null,
-      { loading: busy, preserveOnLoading: true }
+      { loading: busy, preserveOnLoading: !clearVehicle }
     );
-    setText(nhtsaEl, vehicle.nhtsa_rating != null ? `${vehicle.nhtsa_rating}/5` : "", null, {
+    setText(nhtsaEl, vehicleData.nhtsa_rating != null ? `${vehicleData.nhtsa_rating}/5` : "", null, {
       loading: busy,
-      preserveOnLoading: true
+      preserveOnLoading: !clearVehicle
     });
-    if (titleStatusEl) titleStatusEl.textContent = formatTitleStatus(vehicle.title_status);
+    if (titleStatusEl) titleStatusEl.textContent = formatTitleStatus(vehicleData.title_status);
     if (paidOffEl) {
-      const paidText = vehicle.paid_off == null ? "" : vehicle.paid_off ? "Yes" : "No";
-      setText(paidOffEl, paidText, null, { loading: busy, preserveOnLoading: true });
+      const paidText = vehicleData.paid_off == null ? "" : vehicleData.paid_off ? "Yes" : "No";
+      setText(paidOffEl, paidText, null, { loading: busy, preserveOnLoading: !clearVehicle });
     }
-    setText(vinEl, vehicle.vin, null, { loading: busy, preserveOnLoading: true });
-    setText(sellerNotesEl, vehicle.seller_description, null, { loading: busy, preserveOnLoading: true });
+    setText(vinEl, vehicleData.vin, null, { loading: busy, preserveOnLoading: !clearVehicle });
+    setText(sellerNotesEl, vehicleData.seller_description, null, { loading: busy, preserveOnLoading: !clearVehicle });
 
     const panel = document.getElementById("fbco-panel");
     if (panel) panel.classList.toggle("fbco-gated", Boolean(gated));
 
     const accessCard = document.getElementById("fbco-access-card");
-    setVisible(accessCard, Boolean(gated || !access?.validated));
+    const isAuthed = Boolean(access?.authenticated);
+    const isValidated = Boolean(access?.validated);
+    setVisible(accessCard, Boolean(gated || !isValidated || isAuthed));
 
     if (authMessageEl) {
       const msg = access?.message || window.FBCO_STATE?.authMessage || "";
       authMessageEl.textContent = msg || "—";
     }
-    const isAuthed = Boolean(access?.authenticated);
-    const isValidated = Boolean(access?.validated);
+    if (subscriptionFlagEl) {
+      if (isValidated) {
+        subscriptionFlagEl.textContent = "Subscribed";
+        subscriptionFlagEl.classList.remove("fbco-status-unsubscribed");
+        subscriptionFlagEl.classList.add("fbco-status-subscribed");
+      } else {
+        subscriptionFlagEl.textContent = "Not subscribed";
+        subscriptionFlagEl.classList.remove("fbco-status-subscribed");
+        subscriptionFlagEl.classList.add("fbco-status-unsubscribed");
+      }
+    }
     if (accessStatusEl) {
       if (isValidated) {
         accessStatusEl.textContent = "Unlocked: subscription active.";
@@ -1163,20 +1251,20 @@
     });
     const notesShown = setText(notesEl, data?.notes, notesBlock, { loading: busy, preserveOnLoading: preserveAnalysis });
     if (vehicleTitleEl) {
-      if (vehicle?.year && vehicle?.make) {
-        const name = [vehicle.year, vehicle.make, vehicle.model].filter(Boolean).join(" ");
+      if (vehicleData?.year && vehicleData?.make) {
+        const name = [vehicleData.year, vehicleData.make, vehicleData.model].filter(Boolean).join(" ");
         vehicleTitleEl.textContent = name;
       } else {
         vehicleTitleEl.textContent = "Vehicle";
       }
     }
 
-    const metaPriceText = window.FBCO_formatUSD(vehicle.price_usd) || "";
-    const metaMileageText = window.FBCO_formatMiles(vehicle.mileage_miles) || "";
-    setText(metaPriceEl, metaPriceText, null, { loading: busy, preserveOnLoading: true });
-    setText(metaMileageEl, metaMileageText, null, { loading: busy, preserveOnLoading: true });
+    const metaPriceText = window.FBCO_formatUSD(vehicleData.price_usd) || "";
+    const metaMileageText = window.FBCO_formatMiles(vehicleData.mileage_miles) || "";
+    setText(metaPriceEl, metaPriceText, null, { loading: busy, preserveOnLoading: !clearVehicle });
+    setText(metaMileageEl, metaMileageText, null, { loading: busy, preserveOnLoading: !clearVehicle });
     if (metaTitleEl) {
-      const t = formatTitleStatus(vehicle.title_status);
+      const t = formatTitleStatus(vehicleData.title_status);
       metaTitleEl.textContent = t;
       metaTitleEl.classList.toggle("fbco-muted", t.startsWith("Unknown"));
     }
@@ -1189,7 +1277,7 @@
     renderList(wearEl, data?.wear_items, stringifyMaintenance, { wrapper: accWear });
     renderList(checklistEl, data?.inspection_checklist, null, { wrapper: accInspection });
     const mergedQuestions = [
-      ...((vehicle?.negotiation_points || []).slice(0, 6)),
+      ...((vehicleData?.negotiation_points || []).slice(0, 6)),
       ...((data?.buyer_questions || []).slice(0, 12))
     ];
     renderList(questionsEl, mergedQuestions, null, { clickable: true, wrapper: accQuestions });

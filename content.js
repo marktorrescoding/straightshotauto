@@ -19,6 +19,8 @@
   const FREE_DAY_KEY = "fbco.free.day.v1";
   const CHECKOUT_PENDING_KEY = "fbco.checkout.pending.v1";
   const AUTH_MODE = "password";
+  const NAV_CLEAR_MS = 1500;
+  let authHydrationPromise = null;
 
   function isItemPage() {
     return /\/marketplace\/item\//.test(location.pathname);
@@ -80,12 +82,65 @@
     return window.FBCO_storage.get(AUTH_STORAGE_KEY, null);
   }
 
+  function normalizeAuthSession(data, prev = null) {
+    if (!data?.access_token) return null;
+    const expiresAt = Number(data.expires_at);
+    const expiresIn = Number(data.expires_in);
+    const fallbackPrev = Number(prev?.expires_at);
+    const computedExpiresAt = Number.isFinite(expiresAt)
+      ? expiresAt
+      : Number.isFinite(expiresIn)
+      ? Math.floor(Date.now() / 1000) + expiresIn
+      : Number.isFinite(fallbackPrev)
+      ? fallbackPrev
+      : null;
+    return {
+      access_token: data.access_token,
+      refresh_token: data.refresh_token || prev?.refresh_token || null,
+      expires_at: computedExpiresAt,
+      token_type: data.token_type || prev?.token_type || "bearer",
+      user: data.user || prev?.user || null
+    };
+  }
+
+  function syncAuthToChromeStorage(session) {
+    if (!chrome?.storage?.local?.set) return;
+    try {
+      chrome.storage.local.set({ [AUTH_STORAGE_KEY]: session });
+    } catch {
+      // ignore
+    }
+  }
+
   function saveAuthSession(session) {
     window.FBCO_storage.set(AUTH_STORAGE_KEY, session);
+    syncAuthToChromeStorage(session);
   }
 
   function clearAuthSession() {
     window.FBCO_storage.set(AUTH_STORAGE_KEY, null);
+    syncAuthToChromeStorage(null);
+  }
+
+  async function hydrateAuthFromChromeStorage() {
+    if (authHydrationPromise) return authHydrationPromise;
+    authHydrationPromise = (async () => {
+      if (!chrome?.storage?.local?.get) return;
+      try {
+        const data = await new Promise((resolve) => {
+          chrome.storage.local.get([AUTH_STORAGE_KEY, AUTH_EMAIL_KEY], (res) => resolve(res || {}));
+        });
+        if (Object.prototype.hasOwnProperty.call(data, AUTH_STORAGE_KEY)) {
+          window.FBCO_storage.set(AUTH_STORAGE_KEY, data[AUTH_STORAGE_KEY] ?? null);
+        }
+        if (Object.prototype.hasOwnProperty.call(data, AUTH_EMAIL_KEY)) {
+          window.FBCO_storage.set(AUTH_EMAIL_KEY, data[AUTH_EMAIL_KEY] ?? "");
+        }
+      } catch {
+        // ignore
+      }
+    })();
+    return authHydrationPromise;
   }
 
   function currentDayStamp() {
@@ -140,7 +195,13 @@
   if (chrome?.storage?.onChanged) {
     chrome.storage.onChanged.addListener((changes, areaName) => {
       if (areaName !== "local") return;
-      if (changes[AUTH_STORAGE_KEY]) onAuthSessionChanged();
+      if (changes[AUTH_STORAGE_KEY]) {
+        window.FBCO_storage.set(AUTH_STORAGE_KEY, changes[AUTH_STORAGE_KEY].newValue ?? null);
+        onAuthSessionChanged();
+      }
+      if (changes[AUTH_EMAIL_KEY]) {
+        window.FBCO_storage.set(AUTH_EMAIL_KEY, changes[AUTH_EMAIL_KEY].newValue ?? "");
+      }
     });
   }
 
@@ -156,19 +217,21 @@
     });
     if (!res.ok) return session;
     const data = await res.json();
-    const next = {
-      access_token: data.access_token,
-      refresh_token: data.refresh_token,
-      expires_at: data.expires_at,
-      user: data.user
-    };
+    const next = normalizeAuthSession(data, session);
+    if (!next) return session;
     saveAuthSession(next);
     return next;
   }
 
   async function getValidSession() {
-    const session = loadAuthSession();
-    if (!session?.access_token || !session?.expires_at) return null;
+    await hydrateAuthFromChromeStorage();
+    const rawSession = loadAuthSession();
+    const session = normalizeAuthSession(rawSession, rawSession);
+    if (!session?.access_token) return null;
+    if (!session?.expires_at) {
+      if (session.refresh_token) return refreshSession(session);
+      return session;
+    }
     const expiresAtMs = session.expires_at * 1000;
     if (Date.now() + 60_000 < expiresAtMs) return session;
     return refreshSession(session);
@@ -208,12 +271,8 @@
     });
     if (!res.ok) throw new Error("Invalid code");
     const data = await res.json();
-    const session = {
-      access_token: data.access_token,
-      refresh_token: data.refresh_token,
-      expires_at: data.expires_at,
-      user: data.user
-    };
+    const session = normalizeAuthSession(data);
+    if (!session) throw new Error("Invalid login session");
     saveAuthSession(session);
     return session;
   }
@@ -234,12 +293,8 @@
     });
     if (!res.ok) throw new Error("Invalid email or password");
     const data = await res.json();
-    const session = {
-      access_token: data.access_token,
-      refresh_token: data.refresh_token,
-      expires_at: data.expires_at,
-      user: data.user
-    };
+    const session = normalizeAuthSession(data);
+    if (!session) throw new Error("Invalid login session");
     saveAuthSession(session);
     return session;
   }
@@ -489,13 +544,18 @@
 
     window.FBCO_STATE.loadingPhase = "Parsing listing…";
     let vehicle = window.FBCO_extractVehicleSnapshot();
+    const suppressVehicle = Number(state.suppressVehicleUntil || 0) > Date.now();
 
-    if (state.lastVehicle) {
+    if (!suppressVehicle && state.lastVehicle) {
       const merged = { ...state.lastVehicle };
       Object.entries(vehicle || {}).forEach(([key, value]) => {
         if (value !== null && value !== undefined && value !== "") merged[key] = value;
       });
       vehicle = merged;
+    }
+    if (suppressVehicle) {
+      vehicle = {};
+      state.lastVehicle = null;
     }
 
     if (vehicle?.year && vehicle?.make) {
@@ -509,6 +569,9 @@
       state.analysisRetryCount = 0;
       state.analysisRetrying = false;
       state.analysisErrorAt = null;
+      state.lastAnalysis = null;
+      state.analysisReady = false;
+      state.analysisRequestedKey = null;
     }
 
     const access = buildAccessInfo(state);
@@ -518,7 +581,8 @@
       error: state.analysisError,
       data: state.lastAnalysis,
       access,
-      gated: state.analysisGated
+      gated: state.analysisGated,
+      clearVehicle: suppressVehicle
     });
     if (renderKey !== state.lastRenderKey) {
       state.lastRenderKey = renderKey;
@@ -529,7 +593,8 @@
         data: state.lastAnalysis,
         loadingText: state.loadingPhase,
         access,
-        gated: state.analysisGated
+        gated: state.analysisGated,
+        clearVehicle: suppressVehicle
       });
     }
 
@@ -538,7 +603,7 @@
       return;
     }
 
-    if (vehicle?.year && vehicle?.make) {
+    if (!suppressVehicle && vehicle?.year && vehicle?.make) {
       if (state.forceAnalysisNext) {
         state.forceAnalysisNext = false;
         requestAnalysis(vehicle, { force: true });
@@ -694,6 +759,7 @@
     state.lastRenderKey = null;
     state.lastVehicle = null;
     state.loadingPhase = "Parsing listing…";
+    state.suppressVehicleUntil = Date.now() + NAV_CLEAR_MS;
     runUpdate();
   };
 
@@ -713,27 +779,48 @@
 
   // FB is SPA: URL changes
   let lastUrl = location.href;
-  setInterval(() => {
-    if (location.href !== lastUrl) {
-      lastUrl = location.href;
-
-      if (window.FBCO_STATE) {
-        window.FBCO_STATE.forceAnalysisNext = true;
-        window.FBCO_STATE.dismissed = false;
-        window.FBCO_STATE.analysisLoading = false;
-        window.FBCO_STATE.analysisError = null;
-        window.FBCO_STATE.lastSnapshotKey = null;
-        window.FBCO_STATE.analysisRequestedKey = null;
-        window.FBCO_STATE.analysisSeq += 1;
-        window.FBCO_STATE.analysisReady = false;
-        window.FBCO_STATE.lastVehicle = null;
-        window.FBCO_STATE.lastRenderKey = null;
-      }
-
-      window.FBCO_removeOverlay && window.FBCO_removeOverlay();
-      scheduleUpdate();
+  function clearForNavigation() {
+    if (window.FBCO_STATE) {
+      window.FBCO_STATE.forceAnalysisNext = true;
+      window.FBCO_STATE.dismissed = false;
+      window.FBCO_STATE.analysisLoading = false;
+      window.FBCO_STATE.analysisError = null;
+      window.FBCO_STATE.lastSnapshotKey = null;
+      window.FBCO_STATE.analysisRequestedKey = null;
+      window.FBCO_STATE.analysisSeq += 1;
+      window.FBCO_STATE.analysisReady = false;
+      window.FBCO_STATE.lastVehicle = null;
+      window.FBCO_STATE.lastAnalysis = null;
+      window.FBCO_STATE.lastRenderKey = null;
+      window.FBCO_STATE.suppressVehicleUntil = Date.now() + NAV_CLEAR_MS;
     }
-  }, 1000);
+    window.FBCO_removeOverlay && window.FBCO_removeOverlay();
+    runUpdate();
+  }
+
+  function onLocationPotentiallyChanged() {
+    if (location.href === lastUrl) return;
+    lastUrl = location.href;
+    clearForNavigation();
+  }
+
+  const originalPushState = history.pushState.bind(history);
+  history.pushState = function (...args) {
+    const out = originalPushState(...args);
+    onLocationPotentiallyChanged();
+    return out;
+  };
+
+  const originalReplaceState = history.replaceState.bind(history);
+  history.replaceState = function (...args) {
+    const out = originalReplaceState(...args);
+    onLocationPotentiallyChanged();
+    return out;
+  };
+
+  window.addEventListener("popstate", onLocationPotentiallyChanged);
+  window.addEventListener("hashchange", onLocationPotentiallyChanged);
+  setInterval(onLocationPotentiallyChanged, 250);
 
   // DOM churn: schedule updates only (cheap)
   const obs = new MutationObserver(() => scheduleUpdate());
