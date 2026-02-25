@@ -152,7 +152,7 @@
     return null;
   }
 
-  function findSectionTextByHeading(headingRegex) {
+  function findSectionByHeading(headingRegex) {
     const els = Array.from(document.querySelectorAll("span, div, h1, h2, h3"))
       .filter(window.FBCO_isVisible)
       .slice(0, 5000);
@@ -162,17 +162,26 @@
       return t && t.length <= 40 && headingRegex.test(t);
     });
 
-    if (!headingEl) return null;
+    if (!headingEl) return { text: null, container: null };
 
     let container = headingEl;
     for (let i = 0; i < 4; i++) {
       if (!container.parentElement) break;
       container = container.parentElement;
       const txt = (container.innerText || "").trim();
-      if (txt && txt.length > 50) return txt;
+      if (txt && txt.length > 50) return { text: txt, container };
     }
 
-    return (headingEl.parentElement?.innerText || "").trim() || null;
+    const fallbackText = (headingEl.parentElement?.innerText || "").trim() || null;
+    return { text: fallbackText, container: headingEl.parentElement || null };
+  }
+
+  function findSectionTextByHeading(headingRegex) {
+    return findSectionByHeading(headingRegex).text;
+  }
+
+  function findSectionContainerByHeading(headingRegex) {
+    return findSectionByHeading(headingRegex).container;
   }
 
   function getSelectedCategoryLabel() {
@@ -366,8 +375,17 @@
 
   function parseTrim(text) {
     if (!text) return null;
-    const m = text.match(/\b(SR5|Limited|TRD|Platinum|Sport)\b/i);
-    return m ? m[1].toUpperCase() : null;
+    const t = String(text);
+    // Multi-word trims first (most specific, avoids partial matches)
+    const multi = t.match(
+      /\b(TRD\s+Pro|TRD\s+Off[-\s]Road|TRD\s+Sport|King\s+Ranch|High\s+Country|1794\s+Edition|EX[-\s]L|Pro[-\s]4X|Lone\s+Star)\b/i
+    );
+    if (multi) return multi[1].replace(/\s+/g, " ").trim();
+    // Single-word trims
+    const single = t.match(
+      /\b(SR5|TRD|Lariat|Laramie|Raptor|Rubicon|Sahara|Denali|AT4|Z71|Rebel|Limited|Platinum|Premier|Touring|Wildstrack|Tradesman|XLT|SLT|LTZ|LT|LS|XLE|XSE|SL|SV|EX|Sport|SE|LE|LX|GT)\b/i
+    );
+    return single ? single[1].toUpperCase() : null;
   }
 
   function inferVehicleTypeHint(text) {
@@ -461,29 +479,6 @@
     const cleaned = text.replace(/\s+\n/g, "\n").trim();
     if (!cleaned) return null;
     return cleaned.length > 4000 ? `${cleaned.slice(0, 4000)}…` : cleaned;
-  }
-
-  function findSectionContainerByHeading(headingRegex) {
-    const els = Array.from(document.querySelectorAll("span, div, h1, h2, h3"))
-      .filter(window.FBCO_isVisible)
-      .slice(0, 5000);
-
-    const headingEl = els.find((el) => {
-      const t = (el.innerText || "").trim();
-      return t && t.length <= 40 && headingRegex.test(t);
-    });
-
-    if (!headingEl) return null;
-
-    let container = headingEl;
-    for (let i = 0; i < 4; i++) {
-      if (!container.parentElement) break;
-      container = container.parentElement;
-      const txt = (container.innerText || "").trim();
-      if (txt && txt.length > 50) return container;
-    }
-
-    return headingEl.parentElement || null;
   }
 
   let sellerSeeMoreClicked = false;

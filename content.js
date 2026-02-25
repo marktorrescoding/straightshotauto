@@ -842,11 +842,16 @@
       selection.addRange(range);
 
       const prefix = el.textContent.trim() ? "\n" : "";
-      document.execCommand("insertText", false, prefix + text);
+      const node = document.createTextNode(prefix + text);
+      range.insertNode(node);
+      range.setStartAfter(node);
+      range.setEndAfter(node);
+      selection.removeAllRanges();
+      selection.addRange(range);
+      el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: prefix + text }));
       return true;
     } catch {
-      document.execCommand("insertText", false, text);
-      return true;
+      return false;
     }
   }
 
@@ -1107,7 +1112,6 @@
 
   window.addEventListener("popstate", onLocationPotentiallyChanged);
   window.addEventListener("hashchange", onLocationPotentiallyChanged);
-  setInterval(onLocationPotentiallyChanged, 250);
 
   // DOM churn: schedule updates only (cheap)
   const obs = new MutationObserver(() => scheduleUpdate());
