@@ -635,6 +635,64 @@ function isSubscriptionActive(record) {
   return status === "active" || status === "trialing";
 }
 
+async function syncSubscriptionFromStripeByEmail(user, env) {
+  const userId = user?.id || null;
+  const email = normalizeText(user?.email);
+  if (!userId || !email || !env.STRIPE_SECRET_KEY) return null;
+
+  const customersRes = await stripeGetRequest(env, `customers?email=${encodeURIComponent(email)}&limit=5`);
+  if (!customersRes?.ok) return null;
+  const customers = Array.isArray(customersRes?.data?.data) ? customersRes.data.data : [];
+  if (!customers.length) return null;
+
+  for (const customer of customers) {
+    const customerId = customer?.id || null;
+    if (!customerId) continue;
+    const subsRes = await stripeGetRequest(
+      env,
+      `subscriptions?customer=${encodeURIComponent(customerId)}&status=all&limit=5`
+    );
+    if (!subsRes?.ok) continue;
+    const subs = Array.isArray(subsRes?.data?.data) ? subsRes.data.data : [];
+    const active = subs.find((s) => {
+      const st = normalizeText(s?.status);
+      return st === "active" || st === "trialing";
+    });
+    if (!active) continue;
+
+    const status = normalizeText(active?.status) || "active";
+    await supabaseAdminRequest("/rest/v1/subscriptions", env, {
+      method: "POST",
+      headers: { Prefer: "resolution=merge-duplicates" },
+      body: JSON.stringify({
+        user_id: userId,
+        status,
+        plan: "monthly",
+        stripe_customer_id: customerId,
+        updated_at: new Date().toISOString()
+      })
+    });
+    return {
+      user_id: userId,
+      status,
+      plan: "monthly",
+      stripe_customer_id: customerId,
+      updated_at: new Date().toISOString()
+    };
+  }
+
+  return null;
+}
+
+async function resolveSubscriptionRecord(user, env) {
+  if (!user?.id) return null;
+  const existing = await getSubscriptionRecord(user.id, env);
+  if (isSubscriptionActive(existing)) return existing;
+  const synced = await syncSubscriptionFromStripeByEmail(user, env);
+  if (synced) return synced;
+  return existing;
+}
+
 async function stripeRequest(env, path, body) {
   if (!env.STRIPE_SECRET_KEY) {
     return { ok: false, status: 500, error: "Missing STRIPE_SECRET_KEY" };
@@ -2488,7 +2546,7 @@ export default {
         const token = getAuthToken(request);
         const user = await fetchSupabaseUser(token, env);
         if (!user) return jsonResponse({ authenticated: false }, origin, 200);
-        const sub = await getSubscriptionRecord(user.id, env);
+        const sub = await resolveSubscriptionRecord(user, env);
         const validated = isSubscriptionActive(sub);
         return jsonResponse(
           {

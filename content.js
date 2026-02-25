@@ -402,13 +402,30 @@
     }
   }
 
-  function startCheckout(popup, email) {
-    const url = new URL(BILLING_CHECKOUT_URL);
-    if (email) url.searchParams.set("email", email);
+  async function startCheckout(popup, email, session) {
+    let checkoutUrl = "";
+    try {
+      const res = await fetch(BILLING_CHECKOUT_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {})
+        },
+        body: JSON.stringify({ email: email || "" })
+      });
+      if (!res.ok) throw new Error(`Checkout failed: ${res.status}`);
+      const data = await res.json().catch(() => ({}));
+      checkoutUrl = typeof data?.url === "string" ? data.url : "";
+    } catch {
+      const url = new URL(BILLING_CHECKOUT_URL);
+      if (email) url.searchParams.set("email", email);
+      checkoutUrl = url.toString();
+    }
+
     if (popup && !popup.closed) {
-      popup.location = url.toString();
+      popup.location = checkoutUrl;
     } else {
-      window.open(url.toString(), "_blank", "noopener,noreferrer");
+      window.open(checkoutUrl, "_blank", "noopener,noreferrer");
     }
   }
 
@@ -975,8 +992,9 @@
     try {
       const emailInput = document.getElementById("fbco-auth-email")?.value?.trim() || "";
       const email = /\S+@\S+\.\S+/.test(emailInput) ? emailInput : "";
-      await getValidSession();
-      startCheckout(popup, email);
+      const session = await getValidSession();
+      state.authSession = session;
+      await startCheckout(popup, email, session);
     } catch (err) {
       if (popup && !popup.closed) popup.close();
       state.authMessage = err?.message || "Unable to start checkout.";
