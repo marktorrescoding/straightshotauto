@@ -50,9 +50,9 @@
     root.dataset.minimized = state.minimized ? "1" : "0";
 
     if (state.minimized) {
-      // icon mode: fixed small footprint
-      root.style.width = "56px";
-      root.style.height = "56px";
+      // icon mode: fixed small footprint — must match .fbco-mini size in styles.css
+      root.style.width = "76px";
+      root.style.height = "76px";
       root.style.resize = "none";
       root.style.overflow = "visible";
     } else {

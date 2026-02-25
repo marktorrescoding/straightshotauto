@@ -581,18 +581,11 @@
 }
 
 #fb-car-overlay-mvp .fbco-section-header .fbco-link-btn {
-  order: -1;
-}
-
-#fb-car-overlay-mvp .fbco-section-header .fbco-section-title {
-  flex: 1 1 auto;
-}
-
-#fb-car-overlay-mvp .fbco-section-header .fbco-link-btn {
   order: 0;
 }
 
 #fb-car-overlay-mvp .fbco-section-header .fbco-section-title {
+  flex: 1 1 auto;
   order: 1;
 }
 
@@ -832,10 +825,7 @@
 }
 
 @keyframes fbco-spin {
-  0% {
-    transform: rotate(0deg);
-  }
-  100% {
+  to {
     transform: rotate(360deg);
   }
 }
