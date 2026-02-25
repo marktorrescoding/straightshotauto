@@ -1434,8 +1434,8 @@
         const dealGrade = isMeaningfulText(data?.deal_grade) ? String(data.deal_grade) : grade?.label || "--";
         setBadgeWithInfo(
           scoreBadgeEl,
-          `Deal Grade ${dealGrade}`,
-          "Deal Grade reflects how good the asking price is versus estimated fair value, adjusted for listing risk.",
+          `Grade ${dealGrade}`,
+          "Overall grade based on price vs. estimated fair value, adjusted for mileage, maintenance history, and listing risk.",
           "fbco-badge fbco-badge-muted"
         );
       }

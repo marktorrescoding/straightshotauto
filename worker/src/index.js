@@ -740,7 +740,7 @@ function deriveTitleStatus(snapshot) {
 
 function hasServiceRecordsClaim(snapshot) {
   const text = normalizeText([snapshot?.seller_description, snapshot?.source_text].join(" "));
-  return /(full service records|service records|dealer maintained|maintenance records)/i.test(text);
+  return /(full service records|service records|dealer maintained|maintenance records|work done includes|work includes|done at \d+k?|done by [a-z]|receipts? available|has receipts?|have receipts?|documented service|service history|maintenance history|shop records?)/i.test(text);
 }
 
 function scrubCleanTitle(text) {
@@ -918,7 +918,7 @@ function hasRecentMaintenanceClaim(snapshot) {
   const text = normalizeText(
     [snapshot?.seller_description, snapshot?.source_text, ...(snapshot?.about_items || [])].join(" ")
   );
-  return /(recent maintenance|within the last|last \d+\s*(months?|weeks?)|fresh oil change|oil changes?|all fluids? (just )?changed|fluids? changed|new brake pads|full tune-?up|brand new tires|new tires|new (thermostat|water pump|radiator|starter|alternator|battery))/i.test(
+  return /(recent maintenance|within the last|last \d+\s*(months?|weeks?)|fresh oil change|oil changes?|all fluids? (just )?changed|fluids? changed|new brake pads|full tune-?up|brand new tires|new tires|new (thermostat|water pump|radiator|starter|alternator|battery)|alternator replaced|new alternator|maf sensor|mass air(flow)? sensor|valve cover gasket|head gasket|transmission flush|trans flush|trans fluid flush|coolant flush|power steering flush|brake fluid flush|differential fluid|transfer case fluid)/i.test(
     text
   );
 }
@@ -1484,6 +1484,8 @@ function applyCompletedServiceOverrides(out, snapshot) {
   const hasNewPads = /(new|brand new)\s+brake\s+pads/i.test(t) || /(fresh)\s+brake\s+pads/i.test(t);
   const hasFreshOil = /(fresh)\s+oil\s+change|oil\s+change\s*(done|completed)?/i.test(t);
   const hasFluidsChanged = /(all fluids? (just )?changed|fluids? (just )?changed|fresh fluid service)/i.test(t);
+  const hasTransFlush = /(transmission flush|trans flush|trans fluid flush|transmission fluid (changed|replaced|flushed)|new transmission fluid)/i.test(t);
+  const hasCoolantFlush = /(coolant flush|coolant (changed|replaced|flushed)|new coolant)/i.test(t);
   const hasTuneUp = /(full\s+tune-?up|tune-?up)/i.test(t);
 
   out.wear_items = asArray(out.wear_items).map((x) => {
@@ -1535,6 +1537,8 @@ function applyCompletedServiceOverrides(out, snapshot) {
   if (hasNewPads) addChecklist("Verify brake pad/rotor condition + test for pulsation (quality of brake job)");
   if (hasFreshOil) addChecklist("Confirm oil type/spec + look for leaks after warm idle (baseline health)");
   if (hasFluidsChanged) addChecklist("Verify recent fluid service receipts (transmission, transfer case, differentials)");
+  if (hasTransFlush && !hasFluidsChanged) addChecklist("Ask for transmission flush receipt + check fluid color on dipstick (confirms quality of service)");
+  if (hasCoolantFlush) addChecklist("Verify coolant flush receipt + check for milky residue on cap (confirms no head gasket issues)");
   if (hasTuneUp) addChecklist("Ask what ‘tune-up’ included (plugs/filters/fluids) and verify receipts");
 
   const ensureQuestion = (q) => {
@@ -1546,6 +1550,7 @@ function applyCompletedServiceOverrides(out, snapshot) {
   if (hasNewPads) ensureQuestion("Were rotors resurfaced/replaced with the pads? (prevents vibration)");
   if (hasTuneUp) ensureQuestion("What did the ‘full tune-up’ include exactly? (avoids vague claims)");
   if (hasFluidsChanged) ensureQuestion("Do you have receipts for the recent fluid service? (confirms drivetrain maintenance)");
+  if (hasTransFlush && !hasFluidsChanged) ensureQuestion("Do you have the transmission flush receipt? (confirms service quality and date)");
 
   out.buyer_questions = asArray(out.buyer_questions).slice(0, 7);
 
@@ -1553,6 +1558,11 @@ function applyCompletedServiceOverrides(out, snapshot) {
     out.expected_maintenance_near_term = asArray(out.expected_maintenance_near_term).filter((x) => {
       const item = normalizeText(x?.item);
       return !/(transmission fluid|transfer case|differential fluid|driveline fluids)/i.test(item);
+    });
+  } else if (hasTransFlush) {
+    out.expected_maintenance_near_term = asArray(out.expected_maintenance_near_term).filter((x) => {
+      const item = normalizeText(x?.item);
+      return !/(transmission fluid|transmission flush|trans flush)/i.test(item);
     });
   }
 }
@@ -1881,6 +1891,54 @@ function applyDeterministicValuationBand(out, snapshot) {
 }
 
 /**
+ * Inject deterministic upsides when seller description signals quality
+ * that the model may miss (OE parts, named shops, itemized receipts, etc.)
+ */
+function ensureUpsides(out, snapshot) {
+  const t = normalizeText([snapshot?.seller_description, snapshot?.source_text, ...(snapshot?.about_items || [])].join(" "));
+
+  const addUpside = (text) => {
+    const key = normalizeText(text);
+    if (!asArray(out.upsides).some((u) => normalizeText(u) === key)) {
+      out.upsides.push(text);
+    }
+  };
+
+  // OE / OEM parts mentioned by brand
+  if (/(oem|o\.e\.|o\.e\.m\.|denso|bosch|ac delco|acdelco|gates|aisin|genuine toyota|genuine honda|genuine ford|factory part)/i.test(t)) {
+    addUpside("OEM/OE parts used — reduces risk of premature failure from aftermarket substitutes");
+  }
+
+  // Named repair shop (not just "shop" or "mechanic")
+  if (/\b[A-Z][a-z]+ (automotive|auto|garage|motors?|service|repair)\b/.test(snapshot?.seller_description || "")) {
+    addUpside("Work performed at named shop — paper trail and potential warranty on labor");
+  }
+
+  // Itemized maintenance history (multiple specific services listed)
+  const serviceKeywords = [
+    /maf\s+sensor|mass air(flow)?/i,
+    /valve cover gasket/i,
+    /alternator/i,
+    /transmission flush|trans flush/i,
+    /coolant flush/i,
+    /timing (belt|chain)/i,
+    /water pump/i,
+    /spark plugs?/i,
+    /struts?|shocks?/i,
+    /serpentine belt/i,
+  ];
+  const matchedServices = serviceKeywords.filter((re) => re.test(t));
+  if (matchedServices.length >= 2) {
+    addUpside("Seller provides itemized maintenance history — above average transparency for private-party listing");
+  }
+
+  // Receipts mentioned
+  if (/(receipts? available|have receipts?|has receipts?|can provide receipts?|will send receipts?)/i.test(t)) {
+    addUpside("Seller claims receipts available — request copies before purchase");
+  }
+}
+
+/**
  * Coerce/fill required output so UI doesn't break even if the model slips.
  * Also enforces some consistency constraints.
  */
@@ -1975,6 +2033,7 @@ function coerceAndFill(raw, snapshot) {
   replaceSpeculativeCELMaintenance(out, snapshot);
   fixWearItemCosts(out, snapshot);
   applyCompletedServiceOverrides(out, snapshot);
+  ensureUpsides(out, snapshot);
   dropGenericOilChangeFromNearTerm(out, snapshot);
   ensureSpecificMaintenance(out, snapshot);
   ensureBuyerQuestions(out, snapshot, derivedTitleStatus);
