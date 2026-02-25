@@ -2522,12 +2522,19 @@ export default {
           return jsonResponse({ error: "Method not allowed" }, origin, 405);
         }
 
+        let resolvedUserId = user?.id || null;
+        if (!resolvedUserId && email) {
+          const emailUser = await findOrCreateSupabaseUserByEmail(email, env);
+          resolvedUserId = emailUser?.id || null;
+        }
+
         const paymentLink = (env.STRIPE_PAYMENT_LINK || "").toString().trim();
         if (paymentLink) {
           try {
             const checkoutUrl = new URL(paymentLink);
             const checkoutEmail = (user?.email || email || "").toString().trim();
             if (checkoutEmail) checkoutUrl.searchParams.set("prefilled_email", checkoutEmail);
+            if (resolvedUserId) checkoutUrl.searchParams.set("client_reference_id", resolvedUserId);
             if (request.method === "GET") {
               return Response.redirect(checkoutUrl.toString(), 303);
             }
@@ -2539,12 +2546,6 @@ export default {
 
         if (!env.STRIPE_PRICE_ID || !env.STRIPE_SUCCESS_URL || !env.STRIPE_CANCEL_URL) {
           return jsonResponse({ error: "Billing not configured" }, origin, 500);
-        }
-
-        let resolvedUserId = user?.id || null;
-        if (!resolvedUserId && email) {
-          const emailUser = await findOrCreateSupabaseUserByEmail(email, env);
-          resolvedUserId = emailUser?.id || null;
         }
 
         const body = new URLSearchParams({
