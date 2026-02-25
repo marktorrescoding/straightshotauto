@@ -18,7 +18,7 @@ const SYSTEM_PROMPT =
   ].join("\n");
 
 const CACHE_TTL_SECONDS = 60 * 60 * 24;
-const CACHE_VERSION = "v12"; // bump to invalidate stale cached analyses after deal-context scoring changes
+const CACHE_VERSION = "v13"; // bump to invalidate stale cached analyses after deal-context scoring changes
 const FREE_DAILY_LIMIT = 5;
 const RATE_MIN_INTERVAL_MS = 0;
 const RATE_WINDOW_MS = 60 * 60 * 1000;
@@ -726,7 +726,17 @@ function deriveTitleStatus(snapshot) {
   if (explicit) {
     if (explicit.includes("no_title")) return "no_title";
     if (explicit.includes("clean")) return "clean";
-    if (explicit.includes("salvage")) return "salvage";
+    if (explicit.includes("salvage")) {
+      // Guard against false parse: "clean title (no salvage, rebuilt...)" can fool
+      // the content script into returning "salvage". If the listing text clearly says
+      // "clean title" and "no salvage" without "salvage title", trust the text.
+      const sellerText = normalizeText(snapshot?.seller_description || "");
+      const hasClearCleanClaim = /\bclean\s+title\b/i.test(sellerText);
+      const hasNoSalvage = /\bno\s+salvage\b/i.test(sellerText);
+      const hasSalvageTitle = /\bsalvage\s+title\b/i.test(sellerText);
+      if (hasClearCleanClaim && hasNoSalvage && !hasSalvageTitle) return "clean";
+      return "salvage";
+    }
     if (explicit.includes("rebuilt") || explicit.includes("rebuild")) return "rebuilt";
     if (explicit.includes("lien")) return "lien";
     if (explicit.includes("unknown")) return "unknown";
@@ -1282,6 +1292,8 @@ function ensureBuyerQuestions(out, snapshot, titleStatus) {
   const trans = inferredTransmission(snapshot);
   const engine = inferredEngine(snapshot);
   const allText = sourceBlob(snapshot);
+  const isEV = /electric|hybrid/i.test(snapshot?.fuel_type || "") ||
+    /\b(tesla|leaf|bolt|id\.?4|ioniq|rivian|lucid|polestar|model [s3xy])\b/i.test(allText);
   const ecoBoost = /ecoboost/i.test(engine || allText);
   const liftOrLevel = /(level(\s|-)?kit|lift|rough country|coilover|extended cv)/i.test(allText);
   const oversizedTires = /\b33("|”|in(ch)?)?\b|\b35("|”|in(ch)?)?\b/.test(allText);
@@ -1300,9 +1312,11 @@ function ensureBuyerQuestions(out, snapshot, titleStatus) {
     list.push(ensureWhy(q));
   };
 
+  const iceOnlyRe = /oil\s+leak|warm\s+idle|timing\s+belt|timing\s+chain|cam\s+phaser|head\s+gasket|coolant\s+flush|transmission\s+fluid|trans\s+fluid|oil\s+change/i;
   const base = asArray(out.buyer_questions)
     .map((q) => asString(q, ""))
-    .filter((q) => q && !genericRe.test(q));
+    .filter((q) => q && q.includes("?") && !genericRe.test(q))
+    .filter((q) => !isEV || !iceOnlyRe.test(q));
 
   const list = [];
   base.forEach((q) => addUnique(list, q));
@@ -1318,7 +1332,7 @@ function ensureBuyerQuestions(out, snapshot, titleStatus) {
       candidates.push(`Is it FWD or AWD${example}? (changes maintenance/traction)`);
     }
   }
-  if (!trans || !engine) {
+  if (!isEV && (!trans || !engine)) {
     candidates.push("Which transmission/engine is it exactly? (changes risk profile)");
   }
   if (ecoBoost) {
@@ -1342,14 +1356,19 @@ function ensureBuyerQuestions(out, snapshot, titleStatus) {
   if (sellerText.includes("ac") || sellerText.includes("a/c")) {
     candidates.push("Does the A/C blow cold at idle? (compressor/charge check)");
   }
-  if (Number.isFinite(mileage) && mileage > 120000) {
+  if (!isEV && Number.isFinite(mileage) && mileage > 120000) {
     candidates.push("If automatic, when was the transmission fluid serviced? (120k+ wear item)");
   }
   if (titleStatus === "unknown") {
     candidates.push("Can you provide VIN + title status details? (history/resale impact)");
   }
-  candidates.push("Any oil leaks after a warm idle? (hidden engine wear)");
-  candidates.push("Any drivetrain noises on turns/accel? (axle/diff wear)");
+  if (isEV) {
+    candidates.push("What does the battery health report show? (range and degradation — request Tesla app screenshot)");
+    candidates.push("Has the vehicle been in any charging incidents or deep discharges? (battery longevity)");
+  } else {
+    candidates.push("Any oil leaks after a warm idle? (hidden engine wear)");
+    candidates.push("Any drivetrain noises on turns/accel? (axle/diff wear)");
+  }
 
   // Ensure at least 2 component-specific questions.
   let componentCount = list.filter(isComponentSpecific).length;
@@ -1383,58 +1402,79 @@ function sharpenRiskFlags(out, snapshot, titleStatus) {
   const text = sourceBlob(snapshot);
   const ecoBoost = /ecoboost/i.test(engine || text);
   const liftOrLevel = /(level(\s|-)?kit|lift|rough country|coilover|extended cv)/i.test(text);
-  const oversizedTires = /\b33("|”|in(ch)?)?\b|\b35("|”|in(ch)?)?\b/.test(text);
+  const oversizedTires = /\b33(“|”|in(ch)?)?\b|\b35(“|”|in(ch)?)?\b/.test(text);
   const canopy = /\b(are\s+canopy|canopy|camper shell|topper)\b/i.test(text);
   const lightingMods = /(led (light )?bar|fog\/flood lights?|hood (and )?roof mounts?|aux(iliary)? lighting)/i.test(text);
   const miles = asNumber(snapshot?.mileage_miles, null);
+  const make = normalizeText(snapshot?.make);
+  const model = normalizeText(snapshot?.model);
+  const year = asNumber(snapshot?.year, null);
   const flags = asArray(out.risk_flags).map((f) => asString(f, "")).filter(Boolean);
   const updated = [];
   const vagueHighMileage = /high mileage/i;
 
+  // Normalize separators and strip ($unknown) cost placeholders from AI-generated flags
+  const normalizeFlag = (f) => f
+    .replace(/\s*\(\$unknown\)/gi, "")
+    .replace(/ ?\-> ?/g, " — ")
+    .replace(/\s+\+\s*/g, " — ")   // handles both " + " and trailing " +"
+    .replace(/\s*—\s*$/, "")
+    .trim();
+
   for (const flag of flags) {
-    if (vagueHighMileage.test(flag) && !/->|\$|cost|risk/i.test(flag)) {
-      updated.push("High mileage -> drivetrain/engine wear risk ($unknown)");
+    if (vagueHighMileage.test(flag) && !/—|->|\$|cost|risk/i.test(flag)) {
+      updated.push("High mileage — drivetrain and engine wear risk increases significantly");
       continue;
     }
-    if (!/\$/i.test(flag)) {
-      updated.push(`${flag} ($unknown)`);
-      continue;
-    }
-    updated.push(flag);
+    updated.push(normalizeFlag(flag));
   }
 
   const derived = [];
   if (titleStatus === "unknown") {
-    derived.push("Title status unknown -> resale/insurance uncertainty ($unknown)");
+    derived.push("Title status not stated — verify before purchase; affects resale and insurance");
   }
   const hasDrivetrainUnknownFlag = updated.some((x) => /(unknown|not stated).*(drivetrain|2wd|4wd|awd|fwd)/i.test(x));
   if (!drive && !hasDrivetrainUnknownFlag) {
-    derived.push("Drivetrain unknown -> parts/maintenance mismatch risk ($unknown)");
+    derived.push("Drivetrain not stated — confirm 2WD vs 4WD/AWD before purchase");
   }
   if (!trans) {
-    derived.push("Transmission unknown -> service/repair risk ($unknown)");
+    derived.push("Transmission not stated — ask seller and factor into maintenance planning");
   }
   if (!snapshot?.seller_description) {
-    derived.push("Limited history -> deferred maintenance risk ($unknown)");
+    derived.push("No seller description — limited history visibility; inspection is essential");
   }
   if (ecoBoost && Number.isFinite(miles) && miles >= 120000) {
-    derived.push("High-mile EcoBoost -> turbo/cam-phaser/timing wear risk ($1,500–$4,000)");
+    derived.push("High-mile EcoBoost — turbo/cam-phaser/timing chain wear risk ($1,500–$4,000)");
   }
   if ((liftOrLevel || oversizedTires) && Number.isFinite(miles)) {
-    derived.push("Lift/oversize tires -> CV/ball-joint/wheel-bearing wear risk ($300–$1,200)");
+    derived.push("Lift/oversize tires — accelerated CV/ball-joint/wheel-bearing wear ($300–$1,200)");
   }
   if (canopy) {
-    derived.push("Canopy/topper fitment -> bed rail load/water-leak risk ($150–$800)");
+    derived.push("Canopy/topper fitted — inspect bed rails and seal for water intrusion ($150–$800)");
   }
   if (lightingMods) {
-    derived.push("Aftermarket lighting -> wiring/fuse/relay quality risk ($100–$800)");
+    derived.push("Aftermarket lighting — inspect wiring/fuse/relay quality ($100–$800)");
+  }
+  // Very high mileage deserves a specific deterministic flag
+  if (Number.isFinite(miles) && miles >= 250000) {
+    derived.push(`Very high mileage (${Math.round(miles).toLocaleString("en-US")} miles) — inspect drivetrain, cooling, and suspension thoroughly`);
+  }
+  // 2005–2011 Tacoma known frame rust settlement issue
+  const isTacomaFrameRisk = make === "toyota" && /tacoma/i.test(model) && Number.isFinite(year) && year >= 2005 && year <= 2011;
+  if (isTacomaFrameRisk) {
+    derived.push("2005–2011 Tacoma known frame rust issue — inspect frame underside for perforation before purchase");
   }
 
-  const deduped = dedupeBySemanticTopic([...updated, ...derived], 6);
-  out.risk_flags = deduped.slice(0, 6).filter(Boolean);
-  while (out.risk_flags.length < 3) {
-    out.risk_flags.push("Inspection findings unknown -> hidden repair risk ($unknown)");
-  }
+  // Derived flags are better-worded; put them first so they win deduplication
+  const deduped = dedupeBySemanticTopic([...derived, ...updated], 6);
+  out.risk_flags = deduped.slice(0, 6).filter((f) => {
+    if (!f) return false;
+    // Drop stale AI flags that say title is unknown when we know it is clean
+    if (titleStatus === "clean" && /\btitle\s*(status\s*)?(not\s+stated|unknown|unverified)/i.test(f)) return false;
+    // Drop stale AI flags about unknown mileage when mileage is actually known
+    if (Number.isFinite(miles) && miles > 0 && /\bmileage[:\s]*(unknown|not\s+provided|not\s+stated)/i.test(f)) return false;
+    return true;
+  });
 }
 
 function groundReputation(out) {
@@ -1721,41 +1761,49 @@ function buildDeterministicSummary(out, snapshot) {
   const year = snapshot?.year;
   const make = asString(snapshot?.make, "").toUpperCase();
   const model = asString(snapshot?.model, "").toUpperCase();
-  const ask = asNumber(snapshot?.price_usd, null);
-  const miles = asNumber(snapshot?.mileage_miles, null);
+  const rawAsk = asNumber(snapshot?.price_usd, null);
+  const ask = rawAsk != null && rawAsk > 0 ? rawAsk : null;
+  const rawMiles = asNumber(snapshot?.mileage_miles, null);
+  const miles = rawMiles != null && rawMiles > 0 ? rawMiles : null;
   const title = deriveTitleStatus(snapshot);
-  const band = computeValuationBand(snapshot, out);
+  const band = ask && miles ? computeValuationBand(snapshot, out) : null;
 
   const subject = [year, make, model].filter(Boolean).join(" ").trim() || "This vehicle";
-  const facts = `${subject} is listed at ${formatUsdWhole(ask)} with ${
-    Number.isFinite(miles) ? `${Math.round(miles).toLocaleString("en-US")} miles` : "unknown mileage"
-  }${title === "clean" ? " and seller-claimed clean title" : ""}.`;
+  const priceText = ask ? formatUsdWhole(ask) : "price not listed";
+  const milesText = miles ? `${Math.round(miles).toLocaleString("en-US")} miles` : "mileage not listed";
+  const facts = `${subject} is listed at ${priceText} with ${milesText}${
+    title === "clean" ? " and seller-claimed clean title" : ""
+  }.`;
 
-  let priceLine = "Pricing appears in line with the estimated range.";
-  if (band) {
+  let priceLine = "";
+  if (!ask || !miles) {
+    priceLine = "Price and mileage not fully extracted — check listing details before making an offer.";
+  } else if (band) {
     if (ask > band.fair_high) {
       priceLine = `Asking price is above estimated fair value by about ${formatUsdWhole(ask - band.fair_high)}.`;
     } else if (ask < band.fair_low) {
       priceLine = `Asking price is below estimated fair value by about ${formatUsdWhole(band.fair_low - ask)}.`;
     } else {
-      priceLine = `Asking price is within estimated fair range (${formatUsdWhole(band.fair_low)}-${formatUsdWhole(
+      priceLine = `Asking price is within estimated fair range (${formatUsdWhole(band.fair_low)}–${formatUsdWhole(
         band.fair_high
       )}).`;
     }
+  } else {
+    priceLine = "Pricing appears in line with the estimated range.";
   }
 
   const expectations = [];
-  if (Number.isFinite(miles) && miles >= 150000) expectations.push("expect higher wear-item and drivetrain maintenance risk");
-  else if (Number.isFinite(miles) && miles <= 60000) expectations.push("mileage is favorable for age");
-  if (!hasKnownValue(snapshot?.vin)) expectations.push("verify VIN/history before committing");
-  if (!hasKnownValue(inferredDrivetrain(snapshot))) expectations.push("confirm drivetrain to avoid ownership mismatch");
-  if (!snapshot?.seller_description) expectations.push("listing notes are sparse, so inspection carries more weight");
+  if (miles != null && miles >= 150000) expectations.push("expect higher wear-item and drivetrain maintenance costs");
+  else if (miles != null && miles <= 60000) expectations.push("mileage is low for age");
+  if (!hasKnownValue(snapshot?.vin)) expectations.push("request VIN for a history check before committing");
+  if (!hasKnownValue(inferredDrivetrain(snapshot))) expectations.push("confirm drivetrain (2WD vs 4WD)");
+  if (!snapshot?.seller_description) expectations.push("sparse listing — inspection and history check carry more weight");
 
   const expectationLine = expectations.length
-    ? `Buyer expectation: ${expectations.slice(0, 2).join("; ")}.`
-    : "Buyer expectation: confirm maintenance records and inspection results before purchase.";
+    ? `Buyer note: ${expectations.slice(0, 2).join("; ")}.`
+    : "Confirm maintenance records and inspection results before purchase.";
 
-  out.summary = `${facts} ${priceLine} ${expectationLine}`;
+  out.summary = [facts, priceLine, expectationLine].filter(Boolean).join(" ");
 }
 
 function formatUsdWhole(n) {
@@ -1939,6 +1987,103 @@ function ensureUpsides(out, snapshot) {
 }
 
 /**
+ * Detect seller-disclosed needs (e.g. "needs new alternator") and inject
+ * them as risk flags and near-term maintenance items so the AI can't miss them.
+ */
+function detectSellerDisclosedNeeds(out, snapshot) {
+  const raw = asString(snapshot?.seller_description, "") + " " + asArray(snapshot?.about_items).join(" ");
+  const t = normalizeText(raw);
+  if (!t) return;
+
+  const needs = [
+    { re: /needs?\s+(a\s+)?(new\s+)?alternator/i,         flag: "Seller reports alternator needs replacement",                   item: "Alternator replacement (seller-disclosed)", cost_diy: "$80–$200", cost_shop: "$250–$500" },
+    { re: /needs?\s+(a\s+)?(new\s+)?transmission/i,        flag: "Seller reports transmission needs replacement",                 item: "Transmission replacement (seller-disclosed)", cost_diy: "$500–$1,500", cost_shop: "$1,500–$4,000" },
+    { re: /needs?\s+(a\s+)?(new\s+)?engine/i,              flag: "Seller reports engine needs replacement",                       item: "Engine replacement (seller-disclosed)", cost_diy: "$1,000–$3,000", cost_shop: "$3,000–$8,000" },
+    { re: /needs?\s+(a\s+)?(new\s+)?timing\s+(belt|chain)/i, flag: "Seller reports timing belt/chain needs service",              item: "Timing belt/chain (seller-disclosed)", cost_diy: "$200–$400", cost_shop: "$500–$1,200" },
+    { re: /needs?\s+(a\s+)?(new\s+)?water\s+pump/i,        flag: "Seller reports water pump needs replacement",                   item: "Water pump (seller-disclosed)", cost_diy: "$80–$150", cost_shop: "$200–$500" },
+    { re: /needs?\s+(a\s+)?(new\s+)?catalytic\s+conv/i,    flag: "Seller reports catalytic converter needs replacement",          item: "Catalytic converter (seller-disclosed)", cost_diy: "$150–$600", cost_shop: "$500–$2,000" },
+    { re: /needs?\s+(a\s+)?(new\s+)?head\s+gasket/i,       flag: "Seller reports head gasket needs replacement — major repair",   item: "Head gasket (seller-disclosed)", cost_diy: "$300–$800", cost_shop: "$1,000–$2,500" },
+    { re: /needs?\s+(a\s+)?(new\s+)?radiator/i,            flag: "Seller reports radiator needs replacement",                    item: "Radiator (seller-disclosed)", cost_diy: "$100–$300", cost_shop: "$300–$700" },
+    { re: /needs?\s+(some\s+)?(body\s+work|bodywork|paint)/i, flag: "Seller reports body work or paint needed",                   item: null, cost_diy: null, cost_shop: null },
+    { re: /needs?\s+(a\s+)?(new\s+)?(ac|a\/c|air conditioning)\s*(compressor|recharge|regas|recharge)?/i, flag: "Seller reports A/C needs service", item: "A/C service (seller-disclosed)", cost_diy: "$50–$150", cost_shop: "$150–$600" },
+    { re: /needs?\s+(work|repair|fixing|attention)/i,       flag: "Seller discloses car needs work — inspect carefully for specifics", item: null, cost_diy: null, cost_shop: null },
+  ];
+
+  for (const { re, flag, item, cost_diy, cost_shop } of needs) {
+    if (!re.test(t)) continue;
+
+    // Add as risk flag if not already present
+    const flagKey = normalizeText(flag);
+    if (!asArray(out.risk_flags).some((f) => normalizeText(f) === flagKey)) {
+      out.risk_flags.unshift(flag);
+    }
+
+    // Add to near-term maintenance if specific enough
+    if (item) {
+      const itemKey = normalizeText(item);
+      const alreadyInMaintenance = asArray(out.expected_maintenance_near_term).some(
+        (x) => normalizeText(x?.item) === itemKey
+      );
+      if (!alreadyInMaintenance) {
+        out.expected_maintenance_near_term.unshift({
+          item,
+          typical_mileage_range: "Now (seller-disclosed need)",
+          why_it_matters: "Seller explicitly states this needs to be done — negotiate price accordingly",
+          estimated_cost_diy: cost_diy || "—",
+          estimated_cost_shop: cost_shop || "—"
+        });
+      }
+    }
+  }
+
+  // Trim risk flags to cap
+  out.risk_flags = out.risk_flags.slice(0, 8);
+}
+
+/**
+ * Filter generic AI boilerplate from deal breakers.
+ * These belong in the inspection checklist, not deal breakers.
+ */
+function injectKnownVehicleDealBreakers(out, snapshot) {
+  const make = normalizeText(snapshot?.make);
+  const model = normalizeText(snapshot?.model);
+  const year = asNumber(snapshot?.year, null);
+
+  // 2005–2011 Tacoma is covered under Toyota's frame rust settlement
+  const isTacomaFrameRisk = make === "toyota" && /tacoma/i.test(model) && Number.isFinite(year) && year >= 2005 && year <= 2011;
+  if (isTacomaFrameRisk) {
+    const alreadyHasFrame = asArray(out.deal_breakers).some((d) => /frame.*rust|rust.*frame/i.test(asString(d, "")));
+    if (!alreadyHasFrame) {
+      out.deal_breakers = [
+        "Frame perforation or severe rust — check Toyota's frame rust settlement; reject if structural integrity is compromised",
+        ...asArray(out.deal_breakers)
+      ];
+    }
+  }
+}
+
+function filterGenericDealBreakers(out, snapshot) {
+  const drive = inferredDrivetrain(snapshot);
+  const hasCarfax = /carfax/i.test(normalizeText(snapshot?.seller_description || ""));
+
+  const GENERIC_PATTERNS = [
+    /found during inspection/i,
+    /during test drive/i,
+    /significant rust or body damage/i,
+    /unexplained mechanical/i,
+    /lack of documentation/i,
+    /inconsistent maintenance records/i,
+    // Drop "unverified drivetrain" if drivetrain is actually known
+    ...(drive ? [/unverified drivetrain|drivetrain.*unverif|drivetrain.*unknown|unknown.*drivetrain/i] : []),
+    // Drop "missing VIN" if seller mentions Carfax (implies VIN available)
+    ...(hasCarfax ? [/missing\s+vin|vin.*not.*available|no\s+vin/i] : []),
+  ];
+  out.deal_breakers = asArray(out.deal_breakers).filter(
+    (s) => !GENERIC_PATTERNS.some((p) => p.test(asString(s, "")))
+  );
+}
+
+/**
  * Coerce/fill required output so UI doesn't break even if the model slips.
  * Also enforces some consistency constraints.
  */
@@ -2020,11 +2165,11 @@ function coerceAndFill(raw, snapshot) {
 
   // Small helpful note when key fields are missing
   const missing = [];
-  if (!snapshot?.price_usd) missing.push("price");
-  if (!snapshot?.mileage_miles) missing.push("mileage");
-  if (!snapshot?.seller_description) missing.push("seller_description");
+  if (!snapshot?.price_usd || Number(snapshot.price_usd) <= 0) missing.push("price");
+  if (!snapshot?.mileage_miles || Number(snapshot.mileage_miles) <= 0) missing.push("mileage");
+  if (!snapshot?.seller_description) missing.push("seller description");
   if (missing.length) {
-    const m = `Missing listing info: ${missing.join(", ")}. This reduces confidence.`;
+    const m = `Listing info not fully captured: ${missing.join(", ")}. Check the listing directly and refresh to re-analyze if data has loaded.`;
     out.notes = out.notes ? `${out.notes} ${m}` : m;
   }
 
@@ -2036,8 +2181,11 @@ function coerceAndFill(raw, snapshot) {
   ensureUpsides(out, snapshot);
   dropGenericOilChangeFromNearTerm(out, snapshot);
   ensureSpecificMaintenance(out, snapshot);
+  detectSellerDisclosedNeeds(out, snapshot);
   ensureBuyerQuestions(out, snapshot, derivedTitleStatus);
   sharpenRiskFlags(out, snapshot, derivedTitleStatus);
+  injectKnownVehicleDealBreakers(out, snapshot);
+  filterGenericDealBreakers(out, snapshot);
   groundReputation(out);
   normalizeLifespanEstimate(out, snapshot);
   applyExtremeMileageCaps(out, snapshot);

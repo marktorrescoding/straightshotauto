@@ -352,14 +352,16 @@
     if (!text) return null;
 
     if (/\b(no title|without title|missing title|lost title|can'?t get title)\b/i.test(text)) return "no_title";
-    if (/salvage|salvamento/i.test(text)) return "salvage";
-    if (/rebuilt|rebuild|reconstructed|reconstruido/i.test(text)) return "rebuilt";
-    if (/lien|gravamen/i.test(text)) return "lien";
 
+    // Clean title must be checked BEFORE salvage/rebuilt — sellers often write
+    // "clean title (no salvage, rebuilt...)" which would otherwise false-match "salvage"
     if (/\bclean\s+title\b/i.test(text)) return "clean_seller_claimed";
-    if (/\bt[ií]tulo\s+limpio\b/i.test(text) || /\btitulo\s+limpio\b/i.test(text)) {
-      return "clean_seller_claimed";
-    }
+    if (/\bt[ií]tulo\s+limpio\b/i.test(text) || /\btitulo\s+limpio\b/i.test(text)) return "clean_seller_claimed";
+
+    // Require salvage/rebuilt not to be negated (e.g. "no salvage history")
+    if (/salvage|salvamento/i.test(text) && !/\bno\s+(salvage|salvamento)/i.test(text)) return "salvage";
+    if (/rebuilt|rebuild|reconstructed|reconstruido/i.test(text) && !/\bno\s+(rebuilt|rebuild)/i.test(text)) return "rebuilt";
+    if (/lien|gravamen/i.test(text)) return "lien";
 
     return null;
   }

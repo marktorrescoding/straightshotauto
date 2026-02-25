@@ -1263,7 +1263,8 @@
     const accessCard = document.getElementById("fbco-access-card");
     const isAuthed = Boolean(access?.authenticated);
     const isValidated = Boolean(access?.validated);
-    setVisible(accessCard, true);
+    // Hide the access card for paying subscribers — the header flag already shows "Subscribed"
+    setVisible(accessCard, !isValidated);
 
     if (authMessageEl) {
       const msg = access?.message || window.FBCO_STATE?.authMessage || "";
@@ -1392,24 +1393,14 @@
     renderList(issuesEl, data?.common_issues, stringifyIssue, { wrapper: accCommon });
     renderList(wearEl, data?.wear_items, stringifyMaintenance, { wrapper: accWear });
     renderList(checklistEl, data?.inspection_checklist, null, { wrapper: accInspection });
-    const mergedQuestionsRaw = [
-      ...((vehicleData?.negotiation_points || []).slice(0, 6)),
-      ...((data?.buyer_questions || []).slice(0, 12))
-    ];
-    const mergedQuestions = [];
-    const seenQuestions = new Set();
-    mergedQuestionsRaw.forEach((q) => {
-      const t = sanitizeListText(q);
-      if (!t) return;
-      const key = t.toLowerCase().replace(/\s+/g, " ").trim();
-      if (seenQuestions.has(key)) return;
-      seenQuestions.add(key);
-      mergedQuestions.push(t);
-    });
+    const mergedQuestions = (data?.buyer_questions || []).slice(0, 8)
+      .map((q) => sanitizeListText(q))
+      .filter(Boolean);
     renderList(questionsEl, mergedQuestions, null, { clickable: true, wrapper: accQuestions });
     renderList(dealBreakersEl, data?.deal_breakers, null, { wrapper: accDeal });
     renderList(risksEl, data?.risk_flags, null, { wrapper: accRisk });
-    renderTags(tagsEl, data?.tags);
+    const REDUNDANT_TAGS = /^(used car|used vehicle|pre-?owned|automobile|auto|car|vehicle|reliable|good condition|great condition|clean)$/i;
+    renderTags(tagsEl, (data?.tags || []).filter((t) => t && !REDUNDANT_TAGS.test(String(t).trim())));
 
     const marketText = isMeaningfulText(data?.market_value_estimate) ? data?.market_value_estimate : "";
     const priceText = isMeaningfulText(data?.price_opinion) ? data?.price_opinion : "";
