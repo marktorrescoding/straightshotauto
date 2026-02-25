@@ -195,6 +195,53 @@
 
           <div class="fbco-tags fbco-blurable" id="fbco-analysis-tags"></div>
 
+          <div class="fbco-accordion fbco-blurable" id="fbco-acc-deal">
+            <button class="fbco-accordion-toggle" type="button" data-target="fbco-deal-body" aria-expanded="true">
+              <span>Deal breakers</span>
+              <span class="fbco-accordion-icon">▾</span>
+            </button>
+            <div id="fbco-deal-body" class="fbco-accordion-body">
+              <ul id="fbco-analysis-dealbreakers" class="fbco-list fbco-list-deal"></ul>
+            </div>
+          </div>
+
+          <div class="fbco-accordion fbco-blurable" id="fbco-acc-risk">
+            <button class="fbco-accordion-toggle" type="button" data-target="fbco-risk-body" aria-expanded="true">
+              <span>Risk flags</span>
+              <span class="fbco-accordion-icon">▾</span>
+            </button>
+            <div id="fbco-risk-body" class="fbco-accordion-body">
+              <ul id="fbco-analysis-risks" class="fbco-list fbco-list-risk"></ul>
+            </div>
+          </div>
+
+          <div class="fbco-accordion fbco-blurable" id="fbco-acc-upsides">
+            <button class="fbco-accordion-toggle" type="button" data-target="fbco-upsides-body" aria-expanded="false">
+              <span>Upsides</span>
+              <span class="fbco-accordion-icon">▾</span>
+            </button>
+            <div id="fbco-upsides-body" class="fbco-accordion-body" hidden>
+              <ul id="fbco-analysis-upsides" class="fbco-list fbco-list-good"></ul>
+            </div>
+          </div>
+
+          <div class="fbco-accordion fbco-blurable" id="fbco-acc-market">
+            <button class="fbco-accordion-toggle" type="button" data-target="fbco-market-body" aria-expanded="false">
+              <span>Market value & price opinion</span>
+              <span class="fbco-accordion-icon">▾</span>
+            </button>
+            <div id="fbco-market-body" class="fbco-accordion-body" hidden>
+              <div class="fbco-kv">
+                <span>Market value</span>
+                <div id="fbco-analysis-market" class="fbco-text">—</div>
+              </div>
+              <div class="fbco-kv">
+                <span>Price opinion</span>
+                <div id="fbco-analysis-price" class="fbco-text">—</div>
+              </div>
+            </div>
+          </div>
+
           <div class="fbco-accordion fbco-blurable" id="fbco-acc-overview">
             <button class="fbco-accordion-toggle" type="button" data-target="fbco-overview-body" aria-expanded="false">
               <span>Overview</span>
@@ -224,16 +271,6 @@
             </div>
           </div>
 
-          <div class="fbco-accordion fbco-blurable" id="fbco-acc-maintenance">
-            <button class="fbco-accordion-toggle" type="button" data-target="fbco-maintenance-body" aria-expanded="true">
-              <span>Likely maintenance (6–18 months)</span>
-              <span class="fbco-accordion-icon">▾</span>
-            </button>
-            <div id="fbco-maintenance-body" class="fbco-accordion-body">
-              <ul id="fbco-analysis-maintenance" class="fbco-list"></ul>
-            </div>
-          </div>
-
           <div class="fbco-accordion fbco-blurable" id="fbco-acc-common">
             <button class="fbco-accordion-toggle" type="button" data-target="fbco-common-body" aria-expanded="false">
               <span>Common issues</span>
@@ -254,43 +291,13 @@
             </div>
           </div>
 
-          <div class="fbco-accordion fbco-blurable" id="fbco-acc-upsides">
-            <button class="fbco-accordion-toggle" type="button" data-target="fbco-upsides-body" aria-expanded="false">
-              <span>Upsides</span>
+          <div class="fbco-accordion fbco-blurable" id="fbco-acc-maintenance">
+            <button class="fbco-accordion-toggle" type="button" data-target="fbco-maintenance-body" aria-expanded="false">
+              <span>Likely maintenance (6–18 months)</span>
               <span class="fbco-accordion-icon">▾</span>
             </button>
-            <div id="fbco-upsides-body" class="fbco-accordion-body" hidden>
-              <ul id="fbco-analysis-upsides" class="fbco-list fbco-list-good"></ul>
-            </div>
-          </div>
-
-          <div class="fbco-accordion fbco-blurable" id="fbco-acc-risk">
-            <button class="fbco-accordion-toggle" type="button" data-target="fbco-risk-body" aria-expanded="false">
-              <span>Risk flags</span>
-              <span class="fbco-accordion-icon">▾</span>
-            </button>
-            <div id="fbco-risk-body" class="fbco-accordion-body" hidden>
-              <ul id="fbco-analysis-risks" class="fbco-list fbco-list-risk"></ul>
-            </div>
-          </div>
-
-          <div class="fbco-accordion fbco-blurable" id="fbco-acc-deal">
-            <button class="fbco-accordion-toggle" type="button" data-target="fbco-deal-body" aria-expanded="false">
-              <span>Deal breakers</span>
-              <span class="fbco-accordion-icon">▾</span>
-            </button>
-            <div id="fbco-deal-body" class="fbco-accordion-body" hidden>
-              <ul id="fbco-analysis-dealbreakers" class="fbco-list fbco-list-deal"></ul>
-            </div>
-          </div>
-
-          <div class="fbco-accordion fbco-blurable" id="fbco-acc-inspection">
-            <button class="fbco-accordion-toggle" type="button" data-target="fbco-inspection-body" aria-expanded="false">
-              <span>Inspection checklist</span>
-              <span class="fbco-accordion-icon">▾</span>
-            </button>
-            <div id="fbco-inspection-body" class="fbco-accordion-body" hidden>
-              <ul id="fbco-analysis-checklist" class="fbco-list"></ul>
+            <div id="fbco-maintenance-body" class="fbco-accordion-body" hidden>
+              <ul id="fbco-analysis-maintenance" class="fbco-list"></ul>
             </div>
           </div>
 
@@ -304,20 +311,13 @@
             </div>
           </div>
 
-          <div class="fbco-accordion fbco-blurable" id="fbco-acc-market">
-            <button class="fbco-accordion-toggle" type="button" data-target="fbco-market-body" aria-expanded="false">
-              <span>Market value & price opinion</span>
+          <div class="fbco-accordion fbco-blurable" id="fbco-acc-inspection">
+            <button class="fbco-accordion-toggle" type="button" data-target="fbco-inspection-body" aria-expanded="false">
+              <span>Inspection checklist</span>
               <span class="fbco-accordion-icon">▾</span>
             </button>
-            <div id="fbco-market-body" class="fbco-accordion-body" hidden>
-              <div class="fbco-kv">
-                <span>Market value</span>
-                <div id="fbco-analysis-market" class="fbco-text">—</div>
-              </div>
-              <div class="fbco-kv">
-                <span>Price opinion</span>
-                <div id="fbco-analysis-price" class="fbco-text">—</div>
-              </div>
+            <div id="fbco-inspection-body" class="fbco-accordion-body" hidden>
+              <ul id="fbco-analysis-checklist" class="fbco-list"></ul>
             </div>
           </div>
 
