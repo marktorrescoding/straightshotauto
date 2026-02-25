@@ -115,6 +115,12 @@
   border-color: #ffe58f;
 }
 
+#fb-car-overlay-mvp .fbco-status-neutral {
+  background: rgba(0,0,0,0.05);
+  color: rgba(0,0,0,0.55);
+  border-color: rgba(0,0,0,0.1);
+}
+
 #fb-car-overlay-mvp .fbco-header-logout {
   display: none;
   border: 1px solid rgba(0,0,0,0.1);

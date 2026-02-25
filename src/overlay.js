@@ -135,6 +135,9 @@
               <button id="fbco-auth-subscribe" class="fbco-btn fbco-btn-primary" type="button">Subscribe $3/mo</button>
               <button id="fbco-auth-logout" class="fbco-btn fbco-btn-ghost" type="button">Sign out</button>
             </div>
+            <div class="fbco-auth-popup-row">
+              <button id="fbco-auth-reset" class="fbco-link-btn" type="button">Forgot password?</button>
+            </div>
             <div id="fbco-auth-message" class="fbco-text fbco-muted">—</div>
           </div>
         </div>
@@ -594,6 +597,20 @@
     };
     logoutBtn?.addEventListener("click", onLogout);
     if (logoutBtn) cleanupFns.push(() => logoutBtn.removeEventListener("click", onLogout));
+
+    const resetBtn = root.querySelector("#fbco-auth-reset");
+    const onReset = (e) => {
+      e.stopPropagation();
+      const email = emailInput?.value?.trim();
+      if (!email) {
+        const msgEl = root.querySelector("#fbco-auth-message");
+        if (msgEl) msgEl.textContent = "Enter your email above first.";
+        return;
+      }
+      window.FBCO_authResetPassword && window.FBCO_authResetPassword(email);
+    };
+    resetBtn?.addEventListener("click", onReset);
+    if (resetBtn) cleanupFns.push(() => resetBtn.removeEventListener("click", onReset));
 
     const accordionToggles = Array.from(root.querySelectorAll(".fbco-accordion-toggle"));
     accordionToggles.forEach((btn) => {
@@ -1253,14 +1270,18 @@
       authMessageEl.textContent = msg || "—";
     }
     if (subscriptionFlagEl) {
+      subscriptionFlagEl.classList.remove("fbco-status-subscribed", "fbco-status-unsubscribed", "fbco-status-neutral");
       if (isValidated) {
         subscriptionFlagEl.textContent = "Subscribed";
-        subscriptionFlagEl.classList.remove("fbco-status-unsubscribed");
         subscriptionFlagEl.classList.add("fbco-status-subscribed");
-      } else {
-        subscriptionFlagEl.textContent = "Not subscribed";
-        subscriptionFlagEl.classList.remove("fbco-status-subscribed");
+      } else if (access?.freeRemaining > 0) {
+        subscriptionFlagEl.textContent = `${access.freeRemaining} free left`;
+        subscriptionFlagEl.classList.add("fbco-status-neutral");
+      } else if (access?.freeRemaining === 0) {
+        subscriptionFlagEl.textContent = "Limit reached";
         subscriptionFlagEl.classList.add("fbco-status-unsubscribed");
+      } else {
+        subscriptionFlagEl.textContent = "";
       }
     }
     if (accessStatusEl) {
@@ -1299,6 +1320,8 @@
       setVisible(authLogoutBtn, isAuthed);
       authLogoutBtn.disabled = !isAuthed;
     }
+    const authResetBtn = document.getElementById("fbco-auth-reset");
+    if (authResetBtn) setVisible(authResetBtn, !isAuthed);
 
     root.dataset.loading = busy ? "1" : "0";
     const loadingTextEl = document.getElementById("fbco-loading-text");

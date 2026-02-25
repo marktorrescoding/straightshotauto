@@ -827,7 +827,8 @@
     el.focus();
 
     if (el.tagName === "TEXTAREA" || el.tagName === "INPUT") {
-      el.value = text;
+      const existing = el.value;
+      el.value = existing ? existing + "\n" + text : text;
       el.dispatchEvent(new Event("input", { bubbles: true }));
       return true;
     }
@@ -840,10 +841,8 @@
       selection.removeAllRanges();
       selection.addRange(range);
 
-      el.textContent = text;
-      el.dispatchEvent(
-        new InputEvent("input", { bubbles: true, data: text, inputType: "insertText" })
-      );
+      const prefix = el.textContent.trim() ? "\n" : "";
+      document.execCommand("insertText", false, prefix + text);
       return true;
     } catch {
       document.execCommand("insertText", false, text);
@@ -881,6 +880,35 @@
       if (!state.lastAnalysis) state.analysisReady = false;
     }
   }
+
+  async function resetPassword(email) {
+    if (!SUPABASE_URL || SUPABASE_URL.includes("YOUR_SUPABASE") || !SUPABASE_ANON_KEY || SUPABASE_ANON_KEY.includes("YOUR_SUPABASE")) {
+      throw new Error("Auth not configured");
+    }
+    if (!email) throw new Error("Email required");
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/recover`, {
+      method: "POST",
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ email })
+    });
+    if (!res.ok) throw new Error("Unable to send reset email");
+  }
+
+  window.FBCO_authResetPassword = async function (email) {
+    const state = window.FBCO_STATE;
+    state.authMessage = "Sending reset email...";
+    scheduleUpdate();
+    try {
+      await resetPassword(email);
+      state.authMessage = "Password reset email sent. Check your inbox.";
+    } catch (err) {
+      state.authMessage = err?.message || "Unable to send reset email.";
+    }
+    scheduleUpdate();
+  };
 
   window.FBCO_authLogin = async function (email, password) {
     const state = window.FBCO_STATE;
