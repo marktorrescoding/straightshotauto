@@ -94,6 +94,9 @@
       }
     };
     const norm = (v) => (typeof v === "string" ? v.trim().replace(/\s+/g, " ") : v ?? "");
+    // Include data-completeness flags so the key changes as the page finishes
+    // loading — this ensures a fresh analysis is requested once price, mileage,
+    // and the seller description all become available.
     return JSON.stringify({
       listing_id: normalizeListingId(vehicle.url),
       url: norm(vehicle.url),
@@ -101,7 +104,10 @@
       year: vehicle.year,
       make: norm(vehicle.make),
       model: norm(vehicle.model),
-      trim: norm(vehicle.trim)
+      trim: norm(vehicle.trim),
+      has_price: Boolean(vehicle.price_usd > 0),
+      has_mileage: Boolean(vehicle.mileage_miles > 0),
+      has_seller: Boolean(vehicle.seller_description)
     });
   }
 
@@ -670,6 +676,10 @@
         access: buildAccessInfo(state),
         gated: state.analysisGated
       });
+      // Re-check the snapshot key after analysis completes. If the page finished
+      // loading while this request was in-flight (adding price/mileage/seller data),
+      // the key will have changed and a fresh full-data analysis will be triggered.
+      if (!state.analysisRetrying) scheduleUpdate();
     }
   }
 
@@ -1040,6 +1050,9 @@
     runUpdate();
     scheduleUpdate();
     setTimeout(() => runUpdate(), 700);
+    // Extra passes for slow-loading pages (Facebook often renders content lazily)
+    setTimeout(() => scheduleUpdate(), 2500);
+    setTimeout(() => scheduleUpdate(), 5000);
   });
 
   window.addEventListener("pageshow", () => scheduleUpdate());
