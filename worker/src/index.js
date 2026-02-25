@@ -2700,7 +2700,7 @@ export default {
 
       const authToken = getAuthToken(request);
       const authUser = await fetchSupabaseUser(authToken, env);
-      const authSub = authUser ? await getSubscriptionRecord(authUser.id, env) : null;
+      const authSub = authUser ? await resolveSubscriptionRecord(authUser, env) : null;
       const authValidated = isSubscriptionActive(authSub);
 
       if (!snapshot.year || !snapshot.make) {
