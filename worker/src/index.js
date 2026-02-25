@@ -2522,6 +2522,21 @@ export default {
           return jsonResponse({ error: "Method not allowed" }, origin, 405);
         }
 
+        const paymentLink = (env.STRIPE_PAYMENT_LINK || "").toString().trim();
+        if (paymentLink) {
+          try {
+            const checkoutUrl = new URL(paymentLink);
+            const checkoutEmail = (user?.email || email || "").toString().trim();
+            if (checkoutEmail) checkoutUrl.searchParams.set("prefilled_email", checkoutEmail);
+            if (request.method === "GET") {
+              return Response.redirect(checkoutUrl.toString(), 303);
+            }
+            return jsonResponse({ url: checkoutUrl.toString() }, origin, 200);
+          } catch {
+            return jsonResponse({ error: "Invalid STRIPE_PAYMENT_LINK" }, origin, 500);
+          }
+        }
+
         if (!env.STRIPE_PRICE_ID || !env.STRIPE_SUCCESS_URL || !env.STRIPE_CANCEL_URL) {
           return jsonResponse({ error: "Billing not configured" }, origin, 500);
         }
