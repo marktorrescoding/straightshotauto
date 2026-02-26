@@ -1019,10 +1019,15 @@
     state.authMessage = "Opening billing portal…";
     scheduleUpdate();
     try {
-      const session = await getValidSession();
-      const token = session?.access_token;
+      // Prefer the in-memory session (same source buildAccessInfo uses for isAuthed check)
+      // so this works even if the stored token just refreshed.
+      let token = state?.authSession?.access_token;
       if (!token) {
-        state.authMessage = "Please log in first.";
+        const session = await getValidSession();
+        token = session?.access_token;
+      }
+      if (!token) {
+        state.authMessage = "Unable to open billing portal — try signing out and back in.";
         scheduleUpdate();
         return;
       }
