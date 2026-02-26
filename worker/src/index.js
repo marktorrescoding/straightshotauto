@@ -2667,46 +2667,44 @@ export default {
         if (request.method !== "POST") {
           return jsonResponse({ error: "Method not allowed" }, origin, 405);
         }
+        const directPortalUrl = env.STRIPE_PORTAL_URL || null;
         const token = getAuthToken(request);
         const user = await fetchSupabaseUser(token, env);
         if (!user) return jsonResponse({ error: "Unauthorized" }, origin, 401);
         const sub = await getSubscriptionRecord(user.id, env);
         const customerId = sub?.stripe_customer_id;
-        if (!customerId || !env.STRIPE_SUCCESS_URL) {
-          return jsonResponse({ error: "Billing not configured" }, origin, 500);
-        }
-        const makePortalSession = (cid) =>
-          stripeRequest(env, "billing_portal/sessions", new URLSearchParams({
-            customer: cid,
-            return_url: env.STRIPE_SUCCESS_URL
-          }));
 
-        let sessionRes = await makePortalSession(customerId);
+        // Try to create a pre-authenticated session so the user lands directly in the portal.
+        if (customerId && env.STRIPE_SUCCESS_URL) {
+          const makePortalSession = (cid) =>
+            stripeRequest(env, "billing_portal/sessions", new URLSearchParams({
+              customer: cid,
+              return_url: env.STRIPE_SUCCESS_URL
+            }));
 
-        // If Stripe doesn't know this customer ID (test/live mode mismatch or stale record),
-        // run the full sync which searches up to 5 customers by email and checks for active subs.
-        if (!sessionRes?.ok && /no such customer/i.test(sessionRes?.error || "")) {
-          const synced = await syncSubscriptionFromStripeByEmail(user, env);
-          const freshId = synced?.stripe_customer_id;
-          if (freshId && freshId !== customerId) {
-            sessionRes = await makePortalSession(freshId);
+          let sessionRes = await makePortalSession(customerId);
+
+          // Stale customer ID — sync from Stripe by email and retry once.
+          if (!sessionRes?.ok && /no such customer/i.test(sessionRes?.error || "")) {
+            const synced = await syncSubscriptionFromStripeByEmail(user, env);
+            const freshId = synced?.stripe_customer_id;
+            if (freshId && freshId !== customerId) {
+              sessionRes = await makePortalSession(freshId);
+            }
+          }
+
+          if (sessionRes?.ok && sessionRes?.data?.url) {
+            return jsonResponse({ url: sessionRes.data.url }, origin, 200);
           }
         }
 
-        // Still failing — the Stripe customer genuinely doesn't exist in this environment
-        // (e.g. test-mode customer ID stored in production). Signal the client so it can
-        // offer to clear the stale record and let the user re-subscribe.
-        if (!sessionRes?.ok) {
-          const isStaleRecord = /no such customer/i.test(sessionRes?.error || "");
-          return jsonResponse(
-            { error: isStaleRecord ? "no_stripe_customer" : (sessionRes?.error || "Unable to create portal session") },
-            origin,
-            isStaleRecord ? 404 : 502
-          );
+        // Fall back to the self-serve portal URL — user enters their email
+        // and Stripe emails them a magic link.
+        if (directPortalUrl) {
+          return jsonResponse({ url: directPortalUrl }, origin, 200);
         }
-        const session = sessionRes.data;
-        if (!session?.url) return jsonResponse({ error: "Unable to create portal session" }, origin, 502);
-        return jsonResponse({ url: session.url }, origin, 200);
+
+        return jsonResponse({ error: "Billing portal not configured" }, origin, 500);
       }
 
       if (url.pathname === "/billing/cancel") {

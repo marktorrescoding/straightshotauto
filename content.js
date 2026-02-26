@@ -1066,18 +1066,11 @@
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data?.url) {
-        if (data?.error === "no_stripe_customer") {
-          // Stale test-mode record — offer to clear it so the user can re-subscribe
-          state.authMessage = "Subscription record is from a test transaction and can't be managed. Click 'Remove record' to clear it and re-subscribe.";
-          state.showClearSubscription = true;
-        } else {
-          state.authMessage = "Unable to open billing portal — try signing out and back in.";
-        }
+        state.authMessage = "Unable to open billing portal — try signing out and back in.";
         scheduleUpdate();
         return;
       }
       state.authMessage = "";
-      state.showClearSubscription = false;
       window.open(data.url, "_blank", "noopener,noreferrer");
     } catch (err) {
       state.authMessage = err?.message || "Unable to open billing portal.";
