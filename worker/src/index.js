@@ -18,7 +18,7 @@ const SYSTEM_PROMPT =
   ].join("\n");
 
 const CACHE_TTL_SECONDS = 60 * 60 * 24;
-const CACHE_VERSION = "v15"; // bump for gpt-4o upgrade + schema simplification
+const CACHE_VERSION = "v16"; // bump for price banding, flat-tow detection, verdict fix, prompt improvements
 const FREE_DAILY_LIMIT = 5;
 const RATE_MIN_INTERVAL_MS = 0;
 const RATE_WINDOW_MS = 60 * 60 * 1000;
@@ -1781,9 +1781,9 @@ function normalizeVerdictTone(out, snapshot) {
   const above = priceOpinion.match(/above fair range by about (\$[\d,]+)/i);
   const below = priceOpinion.match(/below fair range by about (\$[\d,]+)/i);
   const overAsk = priceOpinion.match(/over ask by about (\$[\d,]+)/i);
-  const nearFair = /near fair range/i.test(priceOpinion);
   if (above) reasons.push(`asking is above fair value by about ${above[1]}`);
   else if (overAsk) reasons.push(`asking is above target by about ${overAsk[1]}`);
+  else if (below) reasons.push(`asking is below fair value by about ${below[1]}`);
 
   const uncertainty = [];
   if (title === "unknown") uncertainty.push("title is unverified");
@@ -1794,12 +1794,6 @@ function normalizeVerdictTone(out, snapshot) {
   if (!primary.length) primary.push("overall listing risk and condition uncertainty");
   const reasonText = `Grade ${grade} reflects ${primary.join(" and ")}.`;
 
-  let priceText = "Price view: asking appears within the estimated fair range.";
-  if (above) priceText = `Price view: asking is above fair value by about ${above[1]}.`;
-  else if (below) priceText = `Price view: asking is below fair value by about ${below[1]}.`;
-  else if (overAsk) priceText = `Price view: asking is slightly above target by about ${overAsk[1]}.`;
-  else if (nearFair) priceText = "Price view: asking is near the estimated fair range.";
-
   const uncertaintyText = uncertainty.length ? ` Missing info: ${uncertainty.join("; ")}.` : "";
 
   let actionText = "Conditional buy — proceed only after inspection and records verification.";
@@ -1807,7 +1801,7 @@ function normalizeVerdictTone(out, snapshot) {
   else if (score >= 80) actionText = "Buy candidate — still verify VIN/history and inspection.";
   else if (score >= 60) actionText = "Conditional buy — reasonable candidate if inspection and history check out.";
 
-  out.final_verdict = `${reasonText} ${priceText}${uncertaintyText} ${actionText}`;
+  out.final_verdict = `${reasonText}${uncertaintyText} ${actionText}`;
 }
 
 function buildDeterministicSummary(out, snapshot) {
@@ -1832,12 +1826,15 @@ function buildDeterministicSummary(out, snapshot) {
   if (!ask || !miles) {
     priceLine = "Price and mileage not fully extracted — check listing details before making an offer.";
   } else if (band) {
-    if (ask > band.fair_high) {
-      priceLine = `Asking price is above estimated fair value by about ${formatUsdWhole(ask - band.fair_high)}.`;
-    } else if (ask < band.fair_low) {
-      priceLine = `Asking price is below estimated fair value by about ${formatUsdWhole(band.fair_low - ask)}.`;
+    const PRICE_NEAR_TOL = 0.08;
+    const overBand = ask > band.fair_high ? ask - band.fair_high : 0;
+    const underBand = ask < band.fair_low ? band.fair_low - ask : 0;
+    if (overBand / band.fair_mid > PRICE_NEAR_TOL) {
+      priceLine = `Asking price is above estimated fair value by about ${formatUsdWhole(overBand)}.`;
+    } else if (underBand / band.fair_mid > PRICE_NEAR_TOL) {
+      priceLine = `Asking price is below estimated fair value by about ${formatUsdWhole(underBand)}.`;
     } else {
-      priceLine = `Asking price is within estimated fair range (${formatUsdWhole(band.fair_low)}–${formatUsdWhole(
+      priceLine = `Asking price is near estimated fair range (${formatUsdWhole(band.fair_low)}–${formatUsdWhole(
         band.fair_high
       )}).`;
     }
@@ -1955,9 +1952,14 @@ function applyDeterministicValuationBand(out, snapshot) {
   )}, fair_high=${formatUsdWhole(band.fair_high)}`;
   const ask = band.ask;
 
+  // Only call out deviation if it's meaningfully outside the band (>8% of fair_mid).
+  // Differences under that threshold are within market variability and should read as "near fair range".
+  const PRICE_NEAR_TOL = 0.08;
   let priceCall = "near fair range";
-  if (ask > band.fair_high) priceCall = `above fair range by about ${formatUsdWhole(ask - band.fair_high)}`;
-  else if (ask < band.fair_low) priceCall = `below fair range by about ${formatUsdWhole(band.fair_low - ask)}`;
+  if (ask > band.fair_high && (ask - band.fair_high) / band.fair_mid > PRICE_NEAR_TOL)
+    priceCall = `above fair range by about ${formatUsdWhole(ask - band.fair_high)}`;
+  else if (ask < band.fair_low && (band.fair_low - ask) / band.fair_mid > PRICE_NEAR_TOL)
+    priceCall = `below fair range by about ${formatUsdWhole(band.fair_low - ask)}`;
 
   out.market_value_estimate = `Fair value band: ${formatUsdWhole(band.fair_low)}–${formatUsdWhole(
     band.fair_high
@@ -2085,6 +2087,30 @@ function detectSellerDisclosedNeeds(out, snapshot) {
           estimated_cost: cost || "—"
         });
       }
+    }
+  }
+
+  // Flat-tow history detection
+  // Sellers sometimes disclose the car was towed behind an RV/RC for many miles —
+  // this creates specific transfer case and driveline wear that the AI can miss.
+  const flatTowRe = /tow(?:ed|ing)?\s+behind\s+(?:r[cv]|an?\s+r[cv]|motorhome|motor\s*home|class\s*[abc])|flat[\s-]tow(?:ed|ing)?|\btoad\s+vehicle/i;
+  if (flatTowRe.test(t)) {
+    const milesM = t.match(/(\d+)\s*k\s*miles?/) || t.match(/(\d+),000\s*miles?.*(?:flat|tow)/i);
+    const towDesc = milesM ? `~${milesM[1]}k miles` : "an unknown mileage";
+    if (!asArray(out.risk_flags).some((f) => /flat.?tow/i.test(f))) {
+      out.risk_flags.unshift(
+        `Vehicle was flat-towed for ${towDesc} per seller — inspect transfer case engagement, front driveshaft, and transmission for abnormal wear ($unknown)`
+      );
+    }
+    if (!asArray(out.buyer_questions).some((q) => /flat.?tow|transfer case/i.test(q))) {
+      out.buyer_questions.push(
+        "Was the transfer case in neutral while flat-towed? (incorrect setting causes major driveline damage)"
+      );
+    }
+    if (!asArray(out.inspection_checklist).some((c) => /flat.?tow|transfer case.*engag/i.test(c))) {
+      out.inspection_checklist.push(
+        "Engage all 4WD modes and transfer case positions — listen for grinding or difficulty engaging (flat-tow wear check)"
+      );
     }
   }
 
@@ -2810,11 +2836,11 @@ export default {
           "",
           "Field requirements (follow exactly):",
           "- summary: 2–4 sentences using listing facts.",
-          "- year_model_reputation: 1–3 sentences; if uncertain about platform specifics, say so.",
+          "- year_model_reputation: 1–3 sentences specific to this exact year and powertrain — name known failure modes, generation-specific weak points, or strengths (e.g. '3.8L V6 prone to water pump failure at high miles', 'Death Wobble common on this JK generation above 80k miles'). Avoid generic statements like 'reliability depends on maintenance'.",
           "- expected_maintenance_near_term: only items genuinely applicable at this mileage/vehicle, up to 6; cost as a single string e.g. '$80–$200 DIY / $250–$500 shop'.",
           "- common_issues: [] unless highly confident for this exact year/generation/powertrain.",
           "- wear_items: only items that are actually relevant to this vehicle; if seller claims new wear items, say 'verify receipt/date'; cost as a single string e.g. '$500–$1,000 DIY / $700–$1,300 shop'.",
-          "- remaining_lifespan_estimate: exactly 3 lines (Best/Average/Worst), each with (assumption).",
+          "- remaining_lifespan_estimate: exactly 3 lines (Best/Average/Worst) expressed as additional miles remaining — NOT calendar years. Format: 'Best: 80,000–100,000 more miles (assumption)'. Calibrate against the lifespan anchors provided.",
           "- risk_flags: only real, specific risks for this listing — no generic filler, no minimum count; each includes subsystem + consequence + ($range or $unknown).",
           "- buyer_questions: 4–7 relevant questions; each has (why it matters); at least 2 component-specific.",
           "- deal_breakers: only concrete findings that would make you walk away from this specific car — no generic advice, no minimum count; each is a specific inspection/test-drive finding.",
