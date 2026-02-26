@@ -257,7 +257,7 @@
     return window.FBCO_storage.get(FREE_SYNC_DAY_KEY, null) === currentDayStamp();
   }
 
-  function markCheckoutPending(ms = 2 * 60 * 1000) {
+  function markCheckoutPending(ms = 10 * 60 * 1000) {
     const until = Date.now() + ms;
     window.FBCO_storage.set(CHECKOUT_PENDING_KEY, until);
     return until;
@@ -729,6 +729,16 @@
   function runUpdate() {
     const state = window.FBCO_STATE;
     if (!state) return;
+
+    // Catch navigation that bypassed our pushState/replaceState patches
+    // (FB sometimes uses the Navigation API or other methods we don't intercept).
+    // When dismissed=true and the URL has changed, the overlay would never
+    // reappear without this check.
+    if (location.href !== lastUrl) {
+      onLocationPotentiallyChanged();
+      return;
+    }
+
     if (typeof window.FBCO_extractVehicleSnapshot !== "function" || typeof window.FBCO_updateOverlay !== "function") {
       setTimeout(() => {
         if (window.FBCO_STATE && !window.FBCO_STATE.dismissed) scheduleUpdate();
@@ -1119,6 +1129,8 @@
     runUpdate();
     setTimeout(() => runUpdate(), 250);
     setTimeout(() => runUpdate(), 900);
+    setTimeout(() => runUpdate(), 1700); // after suppressVehicleUntil (1500ms) expires
+    setTimeout(() => runUpdate(), 3000); // safety net for slow-loading listings
   }
 
   function onLocationPotentiallyChanged() {

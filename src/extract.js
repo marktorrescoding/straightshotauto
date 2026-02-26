@@ -43,9 +43,7 @@
   function findPriceText() {
     const anchorTop = getTitleAnchorTop();
 
-    const els = Array.from(document.querySelectorAll("span, div"))
-      .filter(window.FBCO_isVisible)
-      .slice(0, 5000);
+    const els = getCachedEls();
 
     function extractAllCurrency(text) {
       if (!text) return [];
@@ -153,9 +151,7 @@
   }
 
   function findSectionByHeading(headingRegex) {
-    const els = Array.from(document.querySelectorAll("span, div, h1, h2, h3"))
-      .filter(window.FBCO_isVisible)
-      .slice(0, 5000);
+    const els = getCachedEls();
 
     const headingEl = els.find((el) => {
       const t = (el.innerText || "").trim();
@@ -210,9 +206,7 @@
   }
 
   function hasVehicleSignals() {
-    const headings = Array.from(document.querySelectorAll("span, div, h1, h2, h3"))
-      .filter(window.FBCO_isVisible)
-      .slice(0, 2500);
+    const headings = getCachedEls();
 
     return headings.some((el) => {
       const t = (el.innerText || "").trim();
@@ -514,9 +508,7 @@
     const fromDesc = extractMileageFromTextBlock(descText);
     if (fromDesc) return fromDesc;
 
-    const nodes = Array.from(document.querySelectorAll("span, div"))
-      .filter(window.FBCO_isVisible)
-      .slice(0, 1400);
+    const nodes = getCachedEls();
 
     for (const el of nodes) {
       const t = (el.innerText || "").trim();
@@ -528,7 +520,20 @@
     return { mileage_text: null, mileage_miles: null };
   }
 
+  // Cached per-extraction visible elements list. Reset at the start of each
+  // FBCO_extractVehicleSnapshot call to avoid 5–6 expensive full-page DOM scans.
+  let _cachedEls = null;
+  function getCachedEls() {
+    if (!_cachedEls) {
+      _cachedEls = Array.from(document.querySelectorAll("span, div, h1, h2, h3"))
+        .slice(0, 5000)
+        .filter(window.FBCO_isVisible);
+    }
+    return _cachedEls;
+  }
+
   window.FBCO_extractVehicleSnapshot = function () {
+    _cachedEls = null; // reset cache so each extraction sees the current DOM
     // Expand seller description once so we can capture full text on next pass.
     expandSellerDescription();
     const raw = getListingTitleText();

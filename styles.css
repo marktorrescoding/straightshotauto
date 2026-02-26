@@ -830,12 +830,6 @@
   color: rgba(0,0,0,0.7);
 }
 
-@keyframes fbco-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 #fb-car-overlay-mvp .fbco-error {
   display: none;
   margin: 6px 0 12px;

@@ -29,7 +29,11 @@ const inFlight = new Map();
 
 async function dedupe(key, fn) {
   const existing = inFlight.get(key);
-  if (existing) return existing;
+  // Each caller must get its own clone: multiple handlers returning the same
+  // Response object would share a single body stream, causing Cloudflare to
+  // generate a no-CORS 500 when the second handler tries to send an already-
+  // consumed body.
+  if (existing) return (await existing).clone();
 
   const p = (async () => {
     try {
@@ -40,7 +44,7 @@ async function dedupe(key, fn) {
   })();
 
   inFlight.set(key, p);
-  return p;
+  return (await p).clone();
 }
 
 function corsHeaders(origin) {
@@ -2391,7 +2395,9 @@ export default {
           if (eventType.startsWith("customer.subscription.")) {
             status = dataObject?.status || "unknown";
           } else if (eventType === "checkout.session.completed") {
-            status = dataObject?.subscription_status || dataObject?.status || "unknown";
+            // dataObject.status = "complete" (session status), not a subscription status.
+            // Default to "active" since checkout.session.completed means payment succeeded.
+            status = "active";
             if (dataObject?.subscription && env.STRIPE_SECRET_KEY) {
               const subRes = await stripeGetRequest(env, `subscriptions/${dataObject.subscription}`);
               if (subRes?.ok && subRes?.data?.status) status = subRes.data.status;
@@ -2700,7 +2706,7 @@ export default {
 
       const authToken = getAuthToken(request);
       const authUser = await fetchSupabaseUser(authToken, env);
-      const authSub = authUser ? await resolveSubscriptionRecord(authUser, env) : null;
+      const authSub = authUser ? await getSubscriptionRecord(authUser.id, env) : null;
       const authValidated = isSubscriptionActive(authSub);
 
       if (!snapshot.year || !snapshot.make) {
