@@ -18,7 +18,7 @@ const SYSTEM_PROMPT =
   ].join("\n");
 
 const CACHE_TTL_SECONDS = 60 * 60 * 24;
-const CACHE_VERSION = "v17"; // bump for AWD inference, sparse listing flag, reputation/deal-breaker prompt fixes
+const CACHE_VERSION = "v19"; // bump for RAV4 AWD inference, lifespan worst-case fix, price opinion text, recent-vehicle reputation prompt
 const FREE_DAILY_LIMIT = 5;
 const RATE_MIN_INTERVAL_MS = 0;
 const RATE_WINDOW_MS = 60 * 60 * 1000;
@@ -365,6 +365,11 @@ function inferredDrivetrain(snapshot) {
   if (make === "subaru" && !/\bbrz\b/.test(model)) return "AWD (inferred)";
   if (make === "lamborghini") return "AWD (inferred)";
   if (make === "ferrari" && /\bawd\b|\bff\b|\bgtc4\b/.test(model)) return "AWD (inferred)";
+  // Toyota RAV4 variants that are always AWD
+  if (make === "toyota" && /\brav4\b/.test(model)) {
+    const trim = normalizeText(snapshot?.trim || "");
+    if (/\btrd\b|\badventure\b|\bhybrid\b|\bprime\b/.test(trim) || /\btrd off-road\b|\brav4 trd\b/.test(t)) return "AWD (inferred)";
+  }
   return null;
 }
 
@@ -570,7 +575,7 @@ async function fetchSupabaseUser(token, env) {
     }
   });
   if (!res.ok) return null;
-  return res.json();
+  return res.json().catch(() => null);
 }
 
 async function supabaseAdminRequest(path, env, options = {}) {
@@ -586,7 +591,7 @@ async function supabaseAdminRequest(path, env, options = {}) {
   });
   if (!res.ok) return null;
   if (res.status === 204) return {};
-  return res.json();
+  return res.json().catch(() => null);
 }
 
 async function fetchSupabaseUserByEmail(email, env) {
@@ -1120,29 +1125,29 @@ function lifespanBandAnchors(bucket, milesNow) {
   const m = Number.isFinite(milesNow) ? milesNow : 150000;
 
   if (bucket === "durable") {
-    if (m < 60000) return { best: 160000, avg: 120000, worst: 30000 };
-    if (m < 120000) return { best: 120000, avg: 80000, worst: 20000 };
-    if (m < 180000) return { best: 80000, avg: 50000, worst: 15000 };
-    return { best: 50000, avg: 30000, worst: 10000 };
+    if (m < 60000) return { best: 160000, avg: 120000, worst: 70000 };
+    if (m < 120000) return { best: 120000, avg: 80000, worst: 45000 };
+    if (m < 180000) return { best: 80000, avg: 50000, worst: 25000 };
+    return { best: 50000, avg: 30000, worst: 12000 };
   }
 
   if (bucket === "complex") {
-    if (m < 60000) return { best: 110000, avg: 80000, worst: 20000 };
-    if (m < 120000) return { best: 80000, avg: 50000, worst: 15000 };
+    if (m < 60000) return { best: 110000, avg: 80000, worst: 40000 };
+    if (m < 120000) return { best: 80000, avg: 50000, worst: 25000 };
     if (m < 180000) return { best: 45000, avg: 25000, worst: 12000 };
-    return { best: 25000, avg: 15000, worst: 10000 };
+    return { best: 25000, avg: 15000, worst: 8000 };
   }
 
   if (bucket === "mixed") {
-    if (m < 60000) return { best: 130000, avg: 95000, worst: 25000 };
-    if (m < 120000) return { best: 95000, avg: 65000, worst: 20000 };
-    if (m < 180000) return { best: 60000, avg: 35000, worst: 15000 };
+    if (m < 60000) return { best: 130000, avg: 95000, worst: 50000 };
+    if (m < 120000) return { best: 95000, avg: 65000, worst: 35000 };
+    if (m < 180000) return { best: 60000, avg: 35000, worst: 18000 };
     return { best: 35000, avg: 20000, worst: 10000 };
   }
 
-  if (m < 60000) return { best: 140000, avg: 105000, worst: 25000 };
-  if (m < 120000) return { best: 105000, avg: 70000, worst: 20000 };
-  if (m < 180000) return { best: 65000, avg: 40000, worst: 15000 };
+  if (m < 60000) return { best: 140000, avg: 105000, worst: 55000 };
+  if (m < 120000) return { best: 105000, avg: 70000, worst: 35000 };
+  if (m < 180000) return { best: 65000, avg: 40000, worst: 18000 };
   return { best: 40000, avg: 25000, worst: 10000 };
 }
 
@@ -1972,9 +1977,7 @@ function applyDeterministicValuationBand(out, snapshot) {
   out.market_value_estimate = `Fair value band: ${formatUsdWhole(band.fair_low)}–${formatUsdWhole(
     band.fair_high
   )} (mid ${formatUsdWhole(band.fair_mid)}).`;
-  out.price_opinion = `Deterministic valuation target: ${structured}. Asking ${formatUsdWhole(
-    ask
-  )} is ${priceCall}.`;
+  out.price_opinion = `Asking ${formatUsdWhole(ask)} is ${priceCall}.`;
 
   if (!Number.isFinite(out.overall_score)) return;
 
@@ -2766,7 +2769,7 @@ export default {
 
       const authToken = getAuthToken(request);
       const authUser = await fetchSupabaseUser(authToken, env);
-      const authSub = authUser ? await getSubscriptionRecord(authUser.id, env) : null;
+      const authSub = authUser ? await resolveSubscriptionRecord(authUser, env) : null;
       const authValidated = isSubscriptionActive(authSub);
 
       if (!snapshot.year || !snapshot.make) {
@@ -2878,7 +2881,7 @@ export default {
           "",
           "Field requirements (follow exactly):",
           "- summary: 2–4 sentences using listing facts.",
-          "- year_model_reputation: 1–3 sentences specific to this exact year and powertrain. Name the top 2–3 known failure modes with the mileage range they occur (e.g. 'LR3 4.4L AJ-V8: valley gasket coolant leak at 80k–120k miles; air suspension compressor fails near 100k–150k miles'). Never write 'reliability depends on maintenance', 'generally robust', or other generic filler — if you do not know specific failure modes for this exact powertrain, say so explicitly.",
+          "- year_model_reputation: 1–3 sentences specific to this exact year and powertrain. For model years 2022 or newer, long-term failure data is not yet available — instead describe the generation platform's track record and any early-owner patterns known so far (e.g. 'Fifth-gen RAV4 2.5L Dynamic Force engine has no widespread issues reported through 80k miles in earlier model years; this 2024 example is too new for long-term failure data'). For older vehicles, name the top 2–3 known failure modes with the mileage range they occur (e.g. 'LR3 4.4L AJ-V8: valley gasket coolant leak at 80k–120k miles; air suspension compressor fails near 100k–150k miles'). Never write 'reliability depends on maintenance', 'generally robust', or other generic filler — if you do not know specific failure modes for this exact powertrain, say so explicitly.",
           "- expected_maintenance_near_term: only items genuinely applicable at this mileage/vehicle, up to 6; cost as a single string e.g. '$80–$200 DIY / $250–$500 shop'.",
           "- common_issues: [] unless highly confident for this exact year/generation/powertrain.",
           "- wear_items: only items that are actually relevant to this vehicle; if seller claims new wear items, say 'verify receipt/date'; cost as a single string e.g. '$500–$1,000 DIY / $700–$1,300 shop'.",
@@ -2975,7 +2978,9 @@ export default {
       return jsonResponse(
         {
           error: "Unhandled error",
-          details: err?.message || String(err || "unknown")
+          details: err?.message || String(err || "unknown"),
+          type: err?.name || "Error",
+          stack: (err?.stack || "").split("\n").slice(0, 6).join("\n")
         },
         origin,
         500

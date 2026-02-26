@@ -626,7 +626,15 @@
         });
         return;
       }
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        let errDetail = "";
+        try {
+          const errBody = await res.json();
+          errDetail = errBody?.details || errBody?.error || "";
+          if (errBody?.stack) console.error("[StraightShot] Worker error stack:", errBody.stack);
+        } catch {}
+        throw new Error(errDetail ? `HTTP ${res.status}: ${errDetail}` : `HTTP ${res.status}`);
+      }
       const data = await res.json();
       const validatedHeader = res.headers.get("X-User-Validated");
       const freeRemainingHeader = res.headers.get("X-Free-Remaining");
