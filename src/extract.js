@@ -12,10 +12,37 @@
     return text.trim();
   }
 
+  // Drivetrain/trim tokens that are never a vehicle make
+  const DRIVETRAIN_TOKEN = /^(AWD|4WD|FWD|RWD|2WD|4x4|4X4)$/i;
+
   function parseYearMakeModel(text) {
     const m = text.match(
       /\b((?:19|20)\d{2})\b\s+([A-Za-z0-9]+)(?:\s+([A-Za-z0-9-]+))?(?:\s+([A-Za-z0-9-]+))?(?:\s+([A-Za-z0-9-]+))?/
     );
+
+    // If the parsed make looks like a drivetrain descriptor (e.g. "2014 AWD" from
+    // "Toyota RAV4 2014 AWD"), check if there is real make/model content before the year.
+    if (!m || DRIVETRAIN_TOKEN.test(m[2])) {
+      const yearMatch = text.match(/\b((?:19|20)\d{2})\b/);
+      if (yearMatch) {
+        const beforeYear = text.slice(0, yearMatch.index).trim();
+        if (beforeYear) {
+          const parts = beforeYear.split(/\s+/).filter(Boolean);
+          if (parts.length >= 1 && /^[A-Za-z]/.test(parts[0])) {
+            const year = yearMatch[1];
+            const make = parts[0];
+            const model = parts.slice(1).join(" ").trim() || null;
+            return {
+              year,
+              make,
+              model: model || null,
+              normalized: [year, make, model].filter(Boolean).join(" ").trim()
+            };
+          }
+        }
+      }
+    }
+
     if (!m) return null;
 
     const year = m[1];

@@ -18,7 +18,7 @@ const SYSTEM_PROMPT =
   ].join("\n");
 
 const CACHE_TTL_SECONDS = 60 * 60 * 24;
-const CACHE_VERSION = "v13"; // bump to invalidate stale cached analyses after deal-context scoring changes
+const CACHE_VERSION = "v14"; // bump to invalidate stale analyses with wrong "title not stated" flag
 const FREE_DAILY_LIMIT = 5;
 const RATE_MIN_INTERVAL_MS = 0;
 const RATE_WINDOW_MS = 60 * 60 * 1000;
@@ -1531,8 +1531,8 @@ function sharpenRiskFlags(out, snapshot, titleStatus) {
   const deduped = dedupeBySemanticTopic([...derived, ...updated], 6);
   out.risk_flags = deduped.slice(0, 6).filter((f) => {
     if (!f) return false;
-    // Drop stale AI flags that say title is unknown when we know it is clean
-    if (titleStatus === "clean" && /\btitle\s*(status\s*)?(not\s+stated|unknown|unverified)/i.test(f)) return false;
+    // Drop stale AI flags that say title is unknown/not stated when we actually know the title status
+    if (titleStatus && /\btitle\s*(status\s*)?(not\s+stated|unknown|unverified)/i.test(f)) return false;
     // Drop stale AI flags about unknown mileage when mileage is actually known
     if (Number.isFinite(miles) && miles > 0 && /\bmileage[:\s]*(unknown|not\s+provided|not\s+stated)/i.test(f)) return false;
     return true;
