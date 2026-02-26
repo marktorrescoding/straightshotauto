@@ -2683,34 +2683,49 @@ export default {
 
         let sessionRes = await makePortalSession(customerId);
 
-        // If Stripe doesn't know this customer ID (test/live mode mismatch or stale ID),
-        // look up the real customer by email and retry once.
+        // If Stripe doesn't know this customer ID (test/live mode mismatch or stale record),
+        // run the full sync which searches up to 5 customers by email and checks for active subs.
         if (!sessionRes?.ok && /no such customer/i.test(sessionRes?.error || "")) {
-          const email = user.email;
-          if (email) {
-            const listRes = await stripeGetRequest(env, `customers?email=${encodeURIComponent(email)}&limit=1`);
-            const freshId = listRes?.data?.data?.[0]?.id;
-            if (freshId && freshId !== customerId) {
-              await supabaseAdminRequest("/rest/v1/subscriptions", env, {
-                method: "POST",
-                headers: { Prefer: "resolution=merge-duplicates" },
-                body: JSON.stringify({ user_id: user.id, stripe_customer_id: freshId, updated_at: new Date().toISOString() })
-              });
-              sessionRes = await makePortalSession(freshId);
-            }
+          const synced = await syncSubscriptionFromStripeByEmail(user, env);
+          const freshId = synced?.stripe_customer_id;
+          if (freshId && freshId !== customerId) {
+            sessionRes = await makePortalSession(freshId);
           }
         }
 
+        // Still failing — the Stripe customer genuinely doesn't exist in this environment
+        // (e.g. test-mode customer ID stored in production). Signal the client so it can
+        // offer to clear the stale record and let the user re-subscribe.
         if (!sessionRes?.ok) {
+          const isStaleRecord = /no such customer/i.test(sessionRes?.error || "");
           return jsonResponse(
-            { error: sessionRes?.error || "Unable to create portal session" },
+            { error: isStaleRecord ? "no_stripe_customer" : (sessionRes?.error || "Unable to create portal session") },
             origin,
-            502
+            isStaleRecord ? 404 : 502
           );
         }
         const session = sessionRes.data;
         if (!session?.url) return jsonResponse({ error: "Unable to create portal session" }, origin, 502);
         return jsonResponse({ url: session.url }, origin, 200);
+      }
+
+      if (url.pathname === "/billing/cancel") {
+        if (request.method !== "POST") {
+          return jsonResponse({ error: "Method not allowed" }, origin, 405);
+        }
+        const token = getAuthToken(request);
+        const user = await fetchSupabaseUser(token, env);
+        if (!user) return jsonResponse({ error: "Unauthorized" }, origin, 401);
+        await supabaseAdminRequest("/rest/v1/subscriptions", env, {
+          method: "POST",
+          headers: { Prefer: "resolution=merge-duplicates" },
+          body: JSON.stringify({
+            user_id: user.id,
+            status: "canceled",
+            updated_at: new Date().toISOString()
+          })
+        });
+        return jsonResponse({ ok: true }, origin, 200);
       }
 
       if (url.pathname !== "/analyze") {

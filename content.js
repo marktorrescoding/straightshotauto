@@ -1014,6 +1014,35 @@
     scheduleUpdate();
   };
 
+  window.FBCO_clearSubscription = async function () {
+    const state = window.FBCO_STATE;
+    state.authMessage = "Removing subscription record…";
+    scheduleUpdate();
+    try {
+      let token = state?.authSession?.access_token;
+      if (!token) {
+        const session = await getValidSession();
+        token = session?.access_token;
+      }
+      if (!token) { state.authMessage = "Not logged in."; scheduleUpdate(); return; }
+      const res = await fetch(`${BILLING_CHECKOUT_URL.replace("/billing/checkout", "/billing/cancel")}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        state.authMessage = "Subscription record removed. You can now re-subscribe.";
+        state.authValidated = false;
+        state.showClearSubscription = false;
+        cacheValidatedState(false);
+      } else {
+        state.authMessage = "Failed to remove record — try again.";
+      }
+    } catch (err) {
+      state.authMessage = err?.message || "Failed to remove record.";
+    }
+    scheduleUpdate();
+  };
+
   window.FBCO_openBillingPortal = async function () {
     const state = window.FBCO_STATE;
     state.authMessage = "Opening billing portal…";
@@ -1037,11 +1066,18 @@
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data?.url) {
-        state.authMessage = "Unable to open billing portal — try signing out and back in.";
+        if (data?.error === "no_stripe_customer") {
+          // Stale test-mode record — offer to clear it so the user can re-subscribe
+          state.authMessage = "Subscription record is from a test transaction and can't be managed. Click 'Remove record' to clear it and re-subscribe.";
+          state.showClearSubscription = true;
+        } else {
+          state.authMessage = "Unable to open billing portal — try signing out and back in.";
+        }
         scheduleUpdate();
         return;
       }
       state.authMessage = "";
+      state.showClearSubscription = false;
       window.open(data.url, "_blank", "noopener,noreferrer");
     } catch (err) {
       state.authMessage = err?.message || "Unable to open billing portal.";

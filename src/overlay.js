@@ -134,6 +134,7 @@
               <button id="fbco-auth-signup" class="fbco-btn fbco-btn-ghost" type="button">Create account</button>
               <button id="fbco-auth-subscribe" class="fbco-btn fbco-btn-primary" type="button">Subscribe $3/mo</button>
               <button id="fbco-auth-unsubscribe" class="fbco-btn fbco-btn-ghost" type="button">Manage subscription</button>
+              <button id="fbco-auth-clear-sub" class="fbco-btn fbco-btn-ghost" type="button" style="color:#c0392b">Remove record</button>
               <button id="fbco-auth-logout" class="fbco-btn fbco-btn-ghost" type="button">Sign out</button>
             </div>
             <div class="fbco-auth-popup-row">
@@ -527,6 +528,7 @@
     const signupBtn = root.querySelector("#fbco-auth-signup");
     const subscribeBtn = root.querySelector("#fbco-auth-subscribe");
     const unsubscribeBtn = root.querySelector("#fbco-auth-unsubscribe");
+    const clearSubBtn = root.querySelector("#fbco-auth-clear-sub");
     const logoutBtn = root.querySelector("#fbco-auth-logout");
     const profileBtn = root.querySelector("#fbco-profile");
     const authPopup = root.querySelector("#fbco-auth-popup");
@@ -598,6 +600,13 @@
     };
     unsubscribeBtn?.addEventListener("click", onUnsubscribe);
     if (unsubscribeBtn) cleanupFns.push(() => unsubscribeBtn.removeEventListener("click", onUnsubscribe));
+
+    const onClearSub = (e) => {
+      e.stopPropagation();
+      window.FBCO_clearSubscription && window.FBCO_clearSubscription();
+    };
+    clearSubBtn?.addEventListener("click", onClearSub);
+    if (clearSubBtn) cleanupFns.push(() => clearSubBtn.removeEventListener("click", onClearSub));
 
     const onLogout = (e) => {
       e.stopPropagation();
@@ -1211,6 +1220,7 @@
     const authSignupBtn = document.getElementById("fbco-auth-signup");
     const authSubscribeBtn = document.getElementById("fbco-auth-subscribe");
     const authUnsubscribeBtn = document.getElementById("fbco-auth-unsubscribe");
+    const authClearSubBtn = document.getElementById("fbco-auth-clear-sub");
     const authLogoutBtn = document.getElementById("fbco-auth-logout");
 
     const accOverview = document.getElementById("fbco-acc-overview");
@@ -1328,6 +1338,9 @@
     }
     if (authUnsubscribeBtn) {
       setVisible(authUnsubscribeBtn, isAuthed && isValidated);
+    }
+    if (authClearSubBtn) {
+      setVisible(authClearSubBtn, Boolean(window.FBCO_STATE?.showClearSubscription));
     }
     if (authLogoutBtn) {
       setVisible(authLogoutBtn, isAuthed);
