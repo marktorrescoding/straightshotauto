@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "StraightShot Auto",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "StraightShot Auto adds a vehicle snapshot and analysis overlay on Facebook Marketplace listings.",
   "icons": {
     "16": "assets/icon16.png",

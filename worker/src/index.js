@@ -18,7 +18,7 @@ const SYSTEM_PROMPT =
   ].join("\n");
 
 const CACHE_TTL_SECONDS = 60 * 60 * 24;
-const CACHE_VERSION = "v16"; // bump for price banding, flat-tow detection, verdict fix, prompt improvements
+const CACHE_VERSION = "v17"; // bump for AWD inference, sparse listing flag, reputation/deal-breaker prompt fixes
 const FREE_DAILY_LIMIT = 5;
 const RATE_MIN_INTERVAL_MS = 0;
 const RATE_WINDOW_MS = 60 * 60 * 1000;
@@ -360,6 +360,11 @@ function inferredDrivetrain(snapshot) {
   if (/\brwd\b/.test(t)) return "RWD";
   if (/\b2wd\b/.test(t)) return "2WD";
   if (make === "lexus" && /\bgx\b/.test(model)) return "4WD (inferred)";
+  // Makes/models that are inherently AWD/4WD — suppresses false "drivetrain unknown" flags
+  if (make === "land rover") return "AWD (inferred)";
+  if (make === "subaru" && !/\bbrz\b/.test(model)) return "AWD (inferred)";
+  if (make === "lamborghini") return "AWD (inferred)";
+  if (make === "ferrari" && /\bawd\b|\bff\b|\bgtc4\b/.test(model)) return "AWD (inferred)";
   return null;
 }
 
@@ -1502,8 +1507,11 @@ function sharpenRiskFlags(out, snapshot, titleStatus) {
   if (!trans) {
     derived.push("Transmission not stated — ask seller and factor into maintenance planning");
   }
-  if (!snapshot?.seller_description) {
+  const sellerDescLen = asString(snapshot?.seller_description, "").trim().length;
+  if (!sellerDescLen) {
     derived.push("No seller description — limited history visibility; inspection is essential");
+  } else if (sellerDescLen < 80) {
+    derived.push("Sparse seller description — very little history detail for this vehicle; pre-purchase inspection by a specialist is essential");
   }
   if (ecoBoost && Number.isFinite(miles) && miles >= 120000) {
     derived.push("High-mile EcoBoost — turbo/cam-phaser/timing chain wear risk ($1,500–$4,000)");
@@ -2836,14 +2844,14 @@ export default {
           "",
           "Field requirements (follow exactly):",
           "- summary: 2–4 sentences using listing facts.",
-          "- year_model_reputation: 1–3 sentences specific to this exact year and powertrain — name known failure modes, generation-specific weak points, or strengths (e.g. '3.8L V6 prone to water pump failure at high miles', 'Death Wobble common on this JK generation above 80k miles'). Avoid generic statements like 'reliability depends on maintenance'.",
+          "- year_model_reputation: 1–3 sentences specific to this exact year and powertrain. Name the top 2–3 known failure modes with the mileage range they occur (e.g. 'LR3 4.4L AJ-V8: valley gasket coolant leak at 80k–120k miles; air suspension compressor fails near 100k–150k miles'). Never write 'reliability depends on maintenance', 'generally robust', or other generic filler — if you do not know specific failure modes for this exact powertrain, say so explicitly.",
           "- expected_maintenance_near_term: only items genuinely applicable at this mileage/vehicle, up to 6; cost as a single string e.g. '$80–$200 DIY / $250–$500 shop'.",
           "- common_issues: [] unless highly confident for this exact year/generation/powertrain.",
           "- wear_items: only items that are actually relevant to this vehicle; if seller claims new wear items, say 'verify receipt/date'; cost as a single string e.g. '$500–$1,000 DIY / $700–$1,300 shop'.",
           "- remaining_lifespan_estimate: exactly 3 lines (Best/Average/Worst) expressed as additional miles remaining — NOT calendar years. Format: 'Best: 80,000–100,000 more miles (assumption)'. Calibrate against the lifespan anchors provided.",
           "- risk_flags: only real, specific risks for this listing — no generic filler, no minimum count; each includes subsystem + consequence + ($range or $unknown).",
           "- buyer_questions: 4–7 relevant questions; each has (why it matters); at least 2 component-specific.",
-          "- deal_breakers: only concrete findings that would make you walk away from this specific car — no generic advice, no minimum count; each is a specific inspection/test-drive finding.",
+          "- deal_breakers: only observable inspection or test-drive findings that would make you walk away — written as symptoms, not abstract risks (e.g. 'Air suspension drops overnight — compressor or airbag failure ($1,500–$3,000)', 'Smoke from exhaust under load — engine or head gasket'). Not: 'Possible air suspension issues'. No minimum count.",
           "- tags: 3–6 short tags.",
           "",
           "Confidence rubric:",

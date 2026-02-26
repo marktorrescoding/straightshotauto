@@ -6,6 +6,7 @@
   const API_URL = "https://car-bot.car-bot.workers.dev/analyze";
   const AUTH_STATUS_URL = "https://car-bot.car-bot.workers.dev/auth/status";
   const BILLING_CHECKOUT_URL = "https://car-bot.car-bot.workers.dev/billing/checkout";
+  const BILLING_PORTAL_URL = "https://car-bot.car-bot.workers.dev/billing/portal";
   const AUTH_CALLBACK_URL = "https://car-bot.car-bot.workers.dev/auth/callback";
   const AUTH_SIGNUP_URL = "https://car-bot.car-bot.workers.dev/auth/signup";
   const SUPABASE_URL = "https://uluvqqypgdpsxzutojdd.supabase.co";
@@ -1010,6 +1011,36 @@
       state.authMessage = err?.message || "Unable to start checkout.";
     }
     scheduleCheckoutPoll();
+    scheduleUpdate();
+  };
+
+  window.FBCO_openBillingPortal = async function () {
+    const state = window.FBCO_STATE;
+    state.authMessage = "Opening billing portal…";
+    scheduleUpdate();
+    try {
+      const session = await getValidSession();
+      const token = session?.access_token;
+      if (!token) {
+        state.authMessage = "Please log in first.";
+        scheduleUpdate();
+        return;
+      }
+      const res = await fetch(BILLING_PORTAL_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.url) {
+        state.authMessage = data?.error || "Unable to open billing portal.";
+        scheduleUpdate();
+        return;
+      }
+      state.authMessage = "";
+      window.open(data.url, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      state.authMessage = err?.message || "Unable to open billing portal.";
+    }
     scheduleUpdate();
   };
 

@@ -133,12 +133,13 @@
               <button id="fbco-auth-login" class="fbco-btn" type="button">Log in</button>
               <button id="fbco-auth-signup" class="fbco-btn fbco-btn-ghost" type="button">Create account</button>
               <button id="fbco-auth-subscribe" class="fbco-btn fbco-btn-primary" type="button">Subscribe $3/mo</button>
+              <button id="fbco-auth-unsubscribe" class="fbco-btn fbco-btn-ghost" type="button">Manage subscription</button>
               <button id="fbco-auth-logout" class="fbco-btn fbco-btn-ghost" type="button">Sign out</button>
             </div>
             <div class="fbco-auth-popup-row">
               <button id="fbco-auth-reset" class="fbco-link-btn" type="button">Forgot password?</button>
             </div>
-            <div id="fbco-auth-message" class="fbco-text fbco-muted">—</div>
+            <div id="fbco-auth-message" class="fbco-text fbco-muted"></div>
           </div>
         </div>
 
@@ -525,6 +526,7 @@
     const loginBtn = root.querySelector("#fbco-auth-login");
     const signupBtn = root.querySelector("#fbco-auth-signup");
     const subscribeBtn = root.querySelector("#fbco-auth-subscribe");
+    const unsubscribeBtn = root.querySelector("#fbco-auth-unsubscribe");
     const logoutBtn = root.querySelector("#fbco-auth-logout");
     const profileBtn = root.querySelector("#fbco-profile");
     const authPopup = root.querySelector("#fbco-auth-popup");
@@ -589,6 +591,13 @@
     };
     subscribeBtn?.addEventListener("click", onSubscribe);
     if (subscribeBtn) cleanupFns.push(() => subscribeBtn.removeEventListener("click", onSubscribe));
+
+    const onUnsubscribe = (e) => {
+      e.stopPropagation();
+      window.FBCO_openBillingPortal && window.FBCO_openBillingPortal();
+    };
+    unsubscribeBtn?.addEventListener("click", onUnsubscribe);
+    if (unsubscribeBtn) cleanupFns.push(() => unsubscribeBtn.removeEventListener("click", onUnsubscribe));
 
     const onLogout = (e) => {
       e.stopPropagation();
@@ -1201,6 +1210,7 @@
     const authLoginBtn = document.getElementById("fbco-auth-login");
     const authSignupBtn = document.getElementById("fbco-auth-signup");
     const authSubscribeBtn = document.getElementById("fbco-auth-subscribe");
+    const authUnsubscribeBtn = document.getElementById("fbco-auth-unsubscribe");
     const authLogoutBtn = document.getElementById("fbco-auth-logout");
 
     const accOverview = document.getElementById("fbco-acc-overview");
@@ -1267,7 +1277,7 @@
 
     if (authMessageEl) {
       const msg = access?.message || window.FBCO_STATE?.authMessage || "";
-      authMessageEl.textContent = msg || "—";
+      authMessageEl.textContent = msg || "";
     }
     if (subscriptionFlagEl) {
       subscriptionFlagEl.classList.remove("fbco-status-subscribed", "fbco-status-unsubscribed", "fbco-status-neutral");
@@ -1315,6 +1325,9 @@
     if (authSubscribeBtn) {
       setVisible(authSubscribeBtn, isAuthed && !isValidated);
       authSubscribeBtn.disabled = isValidated;
+    }
+    if (authUnsubscribeBtn) {
+      setVisible(authUnsubscribeBtn, isAuthed && isValidated);
     }
     if (authLogoutBtn) {
       setVisible(authLogoutBtn, isAuthed);
