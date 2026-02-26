@@ -110,7 +110,10 @@
                 <div class="fbco-title-name">StraightShot Auto</div>
                 <span id="fbco-subscription-flag" class="fbco-status-flag fbco-status-unsubscribed">Not subscribed</span>
               </div>
-              <div class="fbco-title-sub" id="fbco-title-sub">Used car snapshot</div>
+              <div class="fbco-title-sub-row">
+                <span class="fbco-title-spinner" aria-hidden="true"></span>
+                <div class="fbco-title-sub" id="fbco-title-sub">Used car snapshot</div>
+              </div>
             </div>
           </div>
           <div class="fbco-actions">
@@ -185,13 +188,6 @@
             <div class="fbco-summary-block fbco-blurable" id="fbco-verdict-block">
               <div class="fbco-section-label">Final verdict</div>
               <div id="fbco-final-verdict" class="fbco-text">—</div>
-            </div>
-          </div>
-
-          <div class="fbco-card fbco-card-access" id="fbco-access-card">
-            <div class="fbco-access-row">
-              <div id="fbco-access-status" class="fbco-text">—</div>
-              <span id="fbco-access-badge" class="fbco-badge fbco-badge-muted">Free</span>
             </div>
           </div>
 
@@ -1210,8 +1206,6 @@
     const lifespanBlock = document.getElementById("fbco-kv-lifespan");
     const dailyBlock = document.getElementById("fbco-kv-daily");
     const skillBlock = document.getElementById("fbco-kv-skill");
-    const accessStatusEl = document.getElementById("fbco-access-status");
-    const accessBadgeEl = document.getElementById("fbco-access-badge");
     const subscriptionFlagEl = document.getElementById("fbco-subscription-flag");
     const authMessageEl = document.getElementById("fbco-auth-message");
     const authEmailEl = document.getElementById("fbco-auth-email");
@@ -1279,11 +1273,8 @@
     const panel = document.getElementById("fbco-panel");
     if (panel) panel.classList.toggle("fbco-gated", Boolean(gated));
 
-    const accessCard = document.getElementById("fbco-access-card");
     const isAuthed = Boolean(access?.authenticated);
     const isValidated = Boolean(access?.validated);
-    // Hide the access card for paying subscribers — the header flag already shows "Subscribed"
-    setVisible(accessCard, !isValidated);
 
     if (authMessageEl) {
       const msg = access?.message || window.FBCO_STATE?.authMessage || "";
@@ -1302,23 +1293,6 @@
         subscriptionFlagEl.classList.add("fbco-status-unsubscribed");
       } else {
         subscriptionFlagEl.textContent = "";
-      }
-    }
-    if (accessStatusEl) {
-      if (isValidated) {
-        accessStatusEl.textContent = "Unlimited";
-      } else {
-        accessStatusEl.textContent =
-          access?.freeRemaining == null ? "Checking free requests..." : `${access.freeRemaining} free requests left`;
-      }
-    }
-    if (accessBadgeEl) {
-      if (isValidated) {
-        accessBadgeEl.textContent = "Unlimited";
-        accessBadgeEl.classList.remove("fbco-badge-muted");
-      } else {
-        accessBadgeEl.textContent = "Free";
-        accessBadgeEl.classList.add("fbco-badge-muted");
       }
     }
     if (authEmailEl) {
