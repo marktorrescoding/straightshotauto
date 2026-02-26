@@ -1032,7 +1032,7 @@
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data?.url) {
-        state.authMessage = data?.error || "Unable to open billing portal.";
+        state.authMessage = "Unable to open billing portal — try signing out and back in.";
         scheduleUpdate();
         return;
       }

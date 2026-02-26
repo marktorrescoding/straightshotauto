@@ -2675,14 +2675,35 @@ export default {
         if (!customerId || !env.STRIPE_SUCCESS_URL) {
           return jsonResponse({ error: "Billing not configured" }, origin, 500);
         }
-        const body = new URLSearchParams({
-          customer: customerId,
-          return_url: env.STRIPE_SUCCESS_URL
-        });
-        const sessionRes = await stripeRequest(env, "billing_portal/sessions", body);
+        const makePortalSession = (cid) =>
+          stripeRequest(env, "billing_portal/sessions", new URLSearchParams({
+            customer: cid,
+            return_url: env.STRIPE_SUCCESS_URL
+          }));
+
+        let sessionRes = await makePortalSession(customerId);
+
+        // If Stripe doesn't know this customer ID (test/live mode mismatch or stale ID),
+        // look up the real customer by email and retry once.
+        if (!sessionRes?.ok && /no such customer/i.test(sessionRes?.error || "")) {
+          const email = user.email;
+          if (email) {
+            const listRes = await stripeGetRequest(env, `customers?email=${encodeURIComponent(email)}&limit=1`);
+            const freshId = listRes?.data?.data?.[0]?.id;
+            if (freshId && freshId !== customerId) {
+              await supabaseAdminRequest("/rest/v1/subscriptions", env, {
+                method: "POST",
+                headers: { Prefer: "resolution=merge-duplicates" },
+                body: JSON.stringify({ user_id: user.id, stripe_customer_id: freshId, updated_at: new Date().toISOString() })
+              });
+              sessionRes = await makePortalSession(freshId);
+            }
+          }
+        }
+
         if (!sessionRes?.ok) {
           return jsonResponse(
-            { error: sessionRes?.error || "Unable to create portal session", stripe_status: sessionRes?.status },
+            { error: sessionRes?.error || "Unable to create portal session" },
             origin,
             502
           );
