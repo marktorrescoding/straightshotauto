@@ -890,9 +890,8 @@
     if (issue.issue) parts.push(issue.issue);
     if (issue.typical_failure_mileage) parts.push(`Mileage: ${issue.typical_failure_mileage}`);
     if (issue.severity) parts.push(`Severity: ${issue.severity}`);
-    if (issue.estimated_cost_diy) parts.push(`DIY: ${issue.estimated_cost_diy}`);
-    if (issue.estimated_cost_shop) parts.push(`Shop: ${issue.estimated_cost_shop}`);
     if (issue.estimated_cost) parts.push(`Cost: ${issue.estimated_cost}`);
+    else if (issue.estimated_cost_diy) parts.push(`DIY: ${issue.estimated_cost_diy}${issue.estimated_cost_shop ? ` / ${issue.estimated_cost_shop} shop` : ""}`);
     if (issue.cost_range) parts.push(`Cost: ${issue.cost_range}`);
     return parts.length ? parts.join(" • ") : null;
   }
@@ -904,8 +903,8 @@
     if (item.item) parts.push(item.item);
     if (item.typical_mileage_range) parts.push(`Mileage: ${item.typical_mileage_range}`);
     if (item.why_it_matters) parts.push(item.why_it_matters);
-    if (item.estimated_cost_diy) parts.push(`DIY: ${item.estimated_cost_diy}`);
-    if (item.estimated_cost_shop) parts.push(`Shop: ${item.estimated_cost_shop}`);
+    if (item.estimated_cost) parts.push(`Cost: ${item.estimated_cost}`);
+    else if (item.estimated_cost_diy) parts.push(`DIY: ${item.estimated_cost_diy}${item.estimated_cost_shop ? ` / ${item.estimated_cost_shop} shop` : ""}`);
     return parts.length ? parts.join(" • ") : null;
   }
 

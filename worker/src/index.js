@@ -18,7 +18,7 @@ const SYSTEM_PROMPT =
   ].join("\n");
 
 const CACHE_TTL_SECONDS = 60 * 60 * 24;
-const CACHE_VERSION = "v14"; // bump to invalidate stale analyses with wrong "title not stated" flag
+const CACHE_VERSION = "v15"; // bump for gpt-4o upgrade + schema simplification
 const FREE_DAILY_LIMIT = 5;
 const RATE_MIN_INTERVAL_MS = 0;
 const RATE_WINDOW_MS = 60 * 60 * 1000;
@@ -1562,15 +1562,13 @@ function fixWearItemCosts(out, snapshot) {
       return {
         ...x,
         item: x.item,
-        estimated_cost_diy: "$0–$50 (rotate/inspect only)",
-        estimated_cost_shop: "$40–$120"
+        estimated_cost: "$0–$50 DIY / $40–$120 shop (rotate/inspect only)"
       };
     }
 
     return {
       ...x,
-      estimated_cost_diy: "$500–$1,000 (set of 4)",
-      estimated_cost_shop: "$700–$1,300"
+      estimated_cost: "$500–$1,000 DIY / $700–$1,300 shop (set of 4)"
     };
   });
 }
@@ -1600,8 +1598,7 @@ function applyCompletedServiceOverrides(out, snapshot) {
         item: "Tires (new per seller — verify receipt/date)",
         typical_mileage_range: "Now",
         why_it_matters: "Confirms install + correct spec",
-        estimated_cost_diy: "$0–$50 (inspect/rotate only)",
-        estimated_cost_shop: "$40–$120"
+        estimated_cost: "$0–$50 DIY / $40–$120 shop (inspect/rotate only)"
       };
     }
 
@@ -1611,8 +1608,7 @@ function applyCompletedServiceOverrides(out, snapshot) {
         item: "Brake pads (new per seller — verify receipt/date)",
         typical_mileage_range: "Now",
         why_it_matters: "Confirms quality + proper bedding",
-        estimated_cost_diy: "$0–$50 (inspect only)",
-        estimated_cost_shop: "$50–$150"
+        estimated_cost: "$0–$50 DIY / $50–$150 shop (inspect only)"
       };
     }
 
@@ -1702,8 +1698,7 @@ function replaceSpeculativeCELMaintenance(out, snapshot) {
         item: "Scan CEL codes + diagnose root cause",
         typical_mileage_range: "Now",
         why_it_matters: "Determines if fault is minor vs major",
-        estimated_cost_diy: "$0–$50",
-        estimated_cost_shop: "$100–$200"
+        estimated_cost: "$0–$50 DIY / $100–$200 shop"
       };
     });
 
@@ -1735,15 +1730,13 @@ function ensureSpecificMaintenance(out, snapshot) {
       item: "Turbo/intercooler hose + boost system inspection",
       typical_mileage_range: "Now",
       why_it_matters: "High-mile forced induction can hide expensive leaks/wear",
-      estimated_cost_diy: "$50–$200",
-      estimated_cost_shop: "$200–$600"
+      estimated_cost: "$50–$200 DIY / $200–$600 shop"
     });
     addItem({
       item: "Timing chain/cam phaser cold-start noise inspection",
       typical_mileage_range: "Now",
       why_it_matters: "Early wear can become major repair",
-      estimated_cost_diy: "$0–$100 (diagnostic)",
-      estimated_cost_shop: "$150–$350 (diagnostic)"
+      estimated_cost: "$0–$100 DIY / $150–$350 shop (diagnostic)"
     });
   }
 
@@ -1752,8 +1745,7 @@ function ensureSpecificMaintenance(out, snapshot) {
       item: "Transfer case + front/rear differential fluid service",
       typical_mileage_range: "Now",
       why_it_matters: "4WD driveline fluids are key at higher mileage",
-      estimated_cost_diy: "$120–$250",
-      estimated_cost_shop: "$250–$500"
+      estimated_cost: "$120–$250 DIY / $250–$500 shop"
     });
   }
 
@@ -1762,8 +1754,7 @@ function ensureSpecificMaintenance(out, snapshot) {
       item: "Front-end/CV/ball-joint inspection + alignment verification",
       typical_mileage_range: "Now",
       why_it_matters: "Lift and larger tires increase front suspension stress",
-      estimated_cost_diy: "$0–$120",
-      estimated_cost_shop: "$150–$450"
+      estimated_cost: "$0–$120 DIY / $150–$450 shop"
     });
   }
 
@@ -2058,20 +2049,20 @@ function detectSellerDisclosedNeeds(out, snapshot) {
   if (!t) return;
 
   const needs = [
-    { re: /needs?\s+(a\s+)?(new\s+)?alternator/i,         flag: "Seller reports alternator needs replacement",                   item: "Alternator replacement (seller-disclosed)", cost_diy: "$80–$200", cost_shop: "$250–$500" },
-    { re: /needs?\s+(a\s+)?(new\s+)?transmission/i,        flag: "Seller reports transmission needs replacement",                 item: "Transmission replacement (seller-disclosed)", cost_diy: "$500–$1,500", cost_shop: "$1,500–$4,000" },
-    { re: /needs?\s+(a\s+)?(new\s+)?engine/i,              flag: "Seller reports engine needs replacement",                       item: "Engine replacement (seller-disclosed)", cost_diy: "$1,000–$3,000", cost_shop: "$3,000–$8,000" },
-    { re: /needs?\s+(a\s+)?(new\s+)?timing\s+(belt|chain)/i, flag: "Seller reports timing belt/chain needs service",              item: "Timing belt/chain (seller-disclosed)", cost_diy: "$200–$400", cost_shop: "$500–$1,200" },
-    { re: /needs?\s+(a\s+)?(new\s+)?water\s+pump/i,        flag: "Seller reports water pump needs replacement",                   item: "Water pump (seller-disclosed)", cost_diy: "$80–$150", cost_shop: "$200–$500" },
-    { re: /needs?\s+(a\s+)?(new\s+)?catalytic\s+conv/i,    flag: "Seller reports catalytic converter needs replacement",          item: "Catalytic converter (seller-disclosed)", cost_diy: "$150–$600", cost_shop: "$500–$2,000" },
-    { re: /needs?\s+(a\s+)?(new\s+)?head\s+gasket/i,       flag: "Seller reports head gasket needs replacement — major repair",   item: "Head gasket (seller-disclosed)", cost_diy: "$300–$800", cost_shop: "$1,000–$2,500" },
-    { re: /needs?\s+(a\s+)?(new\s+)?radiator/i,            flag: "Seller reports radiator needs replacement",                    item: "Radiator (seller-disclosed)", cost_diy: "$100–$300", cost_shop: "$300–$700" },
-    { re: /needs?\s+(some\s+)?(body\s+work|bodywork|paint)/i, flag: "Seller reports body work or paint needed",                   item: null, cost_diy: null, cost_shop: null },
-    { re: /needs?\s+(a\s+)?(new\s+)?(ac|a\/c|air conditioning)\s*(compressor|recharge|regas|recharge)?/i, flag: "Seller reports A/C needs service", item: "A/C service (seller-disclosed)", cost_diy: "$50–$150", cost_shop: "$150–$600" },
-    { re: /needs?\s+(work|repair|fixing|attention)/i,       flag: "Seller discloses car needs work — inspect carefully for specifics", item: null, cost_diy: null, cost_shop: null },
+    { re: /needs?\s+(a\s+)?(new\s+)?alternator/i,         flag: "Seller reports alternator needs replacement",                   item: "Alternator replacement (seller-disclosed)", cost: "$80–$200 DIY / $250–$500 shop" },
+    { re: /needs?\s+(a\s+)?(new\s+)?transmission/i,        flag: "Seller reports transmission needs replacement",                 item: "Transmission replacement (seller-disclosed)", cost: "$500–$1,500 DIY / $1,500–$4,000 shop" },
+    { re: /needs?\s+(a\s+)?(new\s+)?engine/i,              flag: "Seller reports engine needs replacement",                       item: "Engine replacement (seller-disclosed)", cost: "$1,000–$3,000 DIY / $3,000–$8,000 shop" },
+    { re: /needs?\s+(a\s+)?(new\s+)?timing\s+(belt|chain)/i, flag: "Seller reports timing belt/chain needs service",              item: "Timing belt/chain (seller-disclosed)", cost: "$200–$400 DIY / $500–$1,200 shop" },
+    { re: /needs?\s+(a\s+)?(new\s+)?water\s+pump/i,        flag: "Seller reports water pump needs replacement",                   item: "Water pump (seller-disclosed)", cost: "$80–$150 DIY / $200–$500 shop" },
+    { re: /needs?\s+(a\s+)?(new\s+)?catalytic\s+conv/i,    flag: "Seller reports catalytic converter needs replacement",          item: "Catalytic converter (seller-disclosed)", cost: "$150–$600 DIY / $500–$2,000 shop" },
+    { re: /needs?\s+(a\s+)?(new\s+)?head\s+gasket/i,       flag: "Seller reports head gasket needs replacement — major repair",   item: "Head gasket (seller-disclosed)", cost: "$300–$800 DIY / $1,000–$2,500 shop" },
+    { re: /needs?\s+(a\s+)?(new\s+)?radiator/i,            flag: "Seller reports radiator needs replacement",                    item: "Radiator (seller-disclosed)", cost: "$100–$300 DIY / $300–$700 shop" },
+    { re: /needs?\s+(some\s+)?(body\s+work|bodywork|paint)/i, flag: "Seller reports body work or paint needed",                   item: null, cost: null },
+    { re: /needs?\s+(a\s+)?(new\s+)?(ac|a\/c|air conditioning)\s*(compressor|recharge|regas|recharge)?/i, flag: "Seller reports A/C needs service", item: "A/C service (seller-disclosed)", cost: "$50–$150 DIY / $150–$600 shop" },
+    { re: /needs?\s+(work|repair|fixing|attention)/i,       flag: "Seller discloses car needs work — inspect carefully for specifics", item: null, cost: null },
   ];
 
-  for (const { re, flag, item, cost_diy, cost_shop } of needs) {
+  for (const { re, flag, item, cost } of needs) {
     if (!re.test(t)) continue;
 
     // Add as risk flag if not already present
@@ -2091,8 +2082,7 @@ function detectSellerDisclosedNeeds(out, snapshot) {
           item,
           typical_mileage_range: "Now (seller-disclosed need)",
           why_it_matters: "Seller explicitly states this needs to be done — negotiate price accordingly",
-          estimated_cost_diy: cost_diy || "—",
-          estimated_cost_shop: cost_shop || "—"
+          estimated_cost: cost || "—"
         });
       }
     }
@@ -2155,27 +2145,32 @@ function coerceAndFill(raw, snapshot) {
   out.summary = asString(raw.summary);
   out.year_model_reputation = asString(raw.year_model_reputation);
 
+  const mergeCost = (x) => {
+    if (x?.estimated_cost) return stripLeadingDecorators(asString(x.estimated_cost));
+    const diy = asString(x?.estimated_cost_diy);
+    const shop = asString(x?.estimated_cost_shop);
+    if (diy && shop) return `${diy} DIY / ${shop} shop`;
+    return diy || shop || "";
+  };
+
   out.expected_maintenance_near_term = asArray(raw.expected_maintenance_near_term).map((x) => ({
     item: stripLeadingDecorators(asString(x?.item)),
     typical_mileage_range: stripLeadingDecorators(asString(x?.typical_mileage_range)),
     why_it_matters: stripLeadingDecorators(asString(x?.why_it_matters)),
-    estimated_cost_diy: stripLeadingDecorators(asString(x?.estimated_cost_diy)),
-    estimated_cost_shop: stripLeadingDecorators(asString(x?.estimated_cost_shop))
+    estimated_cost: mergeCost(x)
   }));
 
   out.common_issues = asArray(raw.common_issues).map((x) => ({
     issue: stripLeadingDecorators(asString(x?.issue)),
     typical_failure_mileage: stripLeadingDecorators(asString(x?.typical_failure_mileage)),
     severity: stripLeadingDecorators(asString(x?.severity)),
-    estimated_cost_diy: stripLeadingDecorators(asString(x?.estimated_cost_diy)),
-    estimated_cost_shop: stripLeadingDecorators(asString(x?.estimated_cost_shop))
+    estimated_cost: mergeCost(x)
   }));
   out.wear_items = asArray(raw.wear_items).map((x) => ({
     item: stripLeadingDecorators(asString(x?.item)),
     typical_mileage_range: stripLeadingDecorators(asString(x?.typical_mileage_range)),
     why_it_matters: stripLeadingDecorators(asString(x?.why_it_matters)),
-    estimated_cost_diy: stripLeadingDecorators(asString(x?.estimated_cost_diy)),
-    estimated_cost_shop: stripLeadingDecorators(asString(x?.estimated_cost_shop))
+    estimated_cost: mergeCost(x)
   }));
 
   // Still read from model, but we overwrite with deterministic builder.
@@ -2296,13 +2291,12 @@ const RESPONSE_SCHEMA = {
         items: {
           type: "object",
           additionalProperties: false,
-          required: ["item", "typical_mileage_range", "why_it_matters", "estimated_cost_diy", "estimated_cost_shop"],
+          required: ["item", "typical_mileage_range", "why_it_matters", "estimated_cost"],
           properties: {
             item: { type: "string" },
             typical_mileage_range: { type: "string" },
             why_it_matters: { type: "string" },
-            estimated_cost_diy: { type: "string" },
-            estimated_cost_shop: { type: "string" }
+            estimated_cost: { type: "string" }
           }
         }
       },
@@ -2311,13 +2305,12 @@ const RESPONSE_SCHEMA = {
         items: {
           type: "object",
           additionalProperties: false,
-          required: ["issue", "typical_failure_mileage", "severity", "estimated_cost_diy", "estimated_cost_shop"],
+          required: ["issue", "typical_failure_mileage", "severity", "estimated_cost"],
           properties: {
             issue: { type: "string" },
             typical_failure_mileage: { type: "string" },
             severity: { type: "string" },
-            estimated_cost_diy: { type: "string" },
-            estimated_cost_shop: { type: "string" }
+            estimated_cost: { type: "string" }
           }
         }
       },
@@ -2326,13 +2319,12 @@ const RESPONSE_SCHEMA = {
         items: {
           type: "object",
           additionalProperties: false,
-          required: ["item", "typical_mileage_range", "why_it_matters", "estimated_cost_diy", "estimated_cost_shop"],
+          required: ["item", "typical_mileage_range", "why_it_matters", "estimated_cost"],
           properties: {
             item: { type: "string" },
             typical_mileage_range: { type: "string" },
             why_it_matters: { type: "string" },
-            estimated_cost_diy: { type: "string" },
-            estimated_cost_shop: { type: "string" }
+            estimated_cost: { type: "string" }
           }
         }
       },
@@ -2819,13 +2811,13 @@ export default {
           "Field requirements (follow exactly):",
           "- summary: 2–4 sentences using listing facts.",
           "- year_model_reputation: 1–3 sentences; if uncertain about platform specifics, say so.",
-          "- expected_maintenance_near_term: 3–6 items with cost ranges.",
+          "- expected_maintenance_near_term: only items genuinely applicable at this mileage/vehicle, up to 6; cost as a single string e.g. '$80–$200 DIY / $250–$500 shop'.",
           "- common_issues: [] unless highly confident for this exact year/generation/powertrain.",
-          "- wear_items: 2–4 items; if seller claims new wear items, say 'verify receipt/date'.",
+          "- wear_items: only items that are actually relevant to this vehicle; if seller claims new wear items, say 'verify receipt/date'; cost as a single string e.g. '$500–$1,000 DIY / $700–$1,300 shop'.",
           "- remaining_lifespan_estimate: exactly 3 lines (Best/Average/Worst), each with (assumption).",
-          "- risk_flags: 3–6; each includes subsystem + consequence + ($range or $unknown).",
-          "- buyer_questions: 4–7; each has (why it matters); at least 2 component-specific.",
-          "- deal_breakers: 3–6 concrete inspection/test-drive findings.",
+          "- risk_flags: only real, specific risks for this listing — no generic filler, no minimum count; each includes subsystem + consequence + ($range or $unknown).",
+          "- buyer_questions: 4–7 relevant questions; each has (why it matters); at least 2 component-specific.",
+          "- deal_breakers: only concrete findings that would make you walk away from this specific car — no generic advice, no minimum count; each is a specific inspection/test-drive finding.",
           "- tags: 3–6 short tags.",
           "",
           "Confidence rubric:",
@@ -2849,9 +2841,9 @@ export default {
             "Content-Type": "application/json"
           },
           body: JSON.stringify({
-            model: "gpt-4o-mini",
+            model: "gpt-4o",
             temperature: 0.15,
-            max_output_tokens: 1600,
+            max_output_tokens: 3500,
             text: {
               format: {
                 type: "json_schema",
