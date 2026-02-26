@@ -1,5 +1,9 @@
 # Release Notes
 
+## 0.5.7 — 2026-02-26
+- Fixed Cloudflare Worker request dedupe logic to avoid sharing locked `ReadableStream` bodies across requests.
+- Eliminated intermittent `/analyze` 500 errors caused by cross-request I/O stream reuse.
+
 ## 0.4.4 — 2026-02-21
 - Added password-based auth flow with a dedicated signup page.
 - Added Stripe success/cancel pages on the Worker domain.

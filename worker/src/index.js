@@ -27,24 +27,38 @@ const RATE_MAX_REQUESTS = 120;
 const rateState = new Map();
 const inFlight = new Map();
 
+async function materializeResponse(response) {
+  const body = new Uint8Array(await response.arrayBuffer());
+  return {
+    status: response.status,
+    statusText: response.statusText,
+    headers: [...response.headers.entries()],
+    body
+  };
+}
+
+function responseFromMaterialized(materialized) {
+  return new Response(materialized.body.slice(), {
+    status: materialized.status,
+    statusText: materialized.statusText,
+    headers: materialized.headers
+  });
+}
+
 async function dedupe(key, fn) {
   const existing = inFlight.get(key);
-  // Each caller must get its own clone: multiple handlers returning the same
-  // Response object would share a single body stream, causing Cloudflare to
-  // generate a no-CORS 500 when the second handler tries to send an already-
-  // consumed body.
-  if (existing) return (await existing).clone();
+  if (existing) return responseFromMaterialized(await existing);
 
   const p = (async () => {
     try {
-      return await fn();
+      return await materializeResponse(await fn());
     } finally {
       inFlight.delete(key);
     }
   })();
 
   inFlight.set(key, p);
-  return (await p).clone();
+  return responseFromMaterialized(await p);
 }
 
 function corsHeaders(origin) {
