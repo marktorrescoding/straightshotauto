@@ -19,7 +19,7 @@ const SYSTEM_PROMPT =
 
 const CACHE_TTL_SECONDS = 60 * 60 * 24;
 const CACHE_VERSION = "v19"; // bump for RAV4 AWD inference, lifespan worst-case fix, price opinion text, recent-vehicle reputation prompt
-const FREE_DAILY_LIMIT = 5;
+const FREE_DAILY_LIMIT = 3;
 const RATE_MIN_INTERVAL_MS = 0;
 const RATE_WINDOW_MS = 60 * 60 * 1000;
 const RATE_MAX_REQUESTS = 120;
@@ -181,7 +181,7 @@ async function consumeFreeAnalysisSlot(request, cache, snapshotKey) {
 function freeLimitResponse(origin, requestId, snapshotKey) {
   return new Response(
     JSON.stringify({
-      error: "Free limit reached. Log in or subscribe to continue.",
+      error: "You've used all 3 free analyses for today. Resets at midnight UTC — or subscribe for unlimited access.",
       code: "free_limit_reached",
       free_limit: FREE_DAILY_LIMIT,
       free_remaining: 0
@@ -2599,6 +2599,27 @@ export default {
             user_id: user.id,
             email: user.email || "unknown",
             subscription_status: sub?.status || "unknown"
+          },
+          origin,
+          200
+        );
+      }
+
+      if (url.pathname === "/quota/status") {
+        const ip = getClientIp(request);
+        const ua = (request.headers.get("User-Agent") || "").slice(0, 180);
+        const bucketSource = `${utcDayStampNow()}|${ip}|${ua}`;
+        const bucketHash = await hashString(bucketSource);
+        const usageReq = new Request(`https://quota.car-bot.local/free/${bucketHash}`);
+        const existing = await cache.match(usageReq);
+        const record = parseFreeUsageRecord(existing ? await existing.text() : "");
+        return jsonResponse(
+          {
+            date_utc: utcDayStampNow(),
+            count: record.count,
+            limit: FREE_DAILY_LIMIT,
+            remaining: Math.max(0, FREE_DAILY_LIMIT - record.count),
+            seen_listings: record.seen_snapshot_keys.length
           },
           origin,
           200

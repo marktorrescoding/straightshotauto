@@ -12,7 +12,7 @@
   const SUPABASE_URL = "https://uluvqqypgdpsxzutojdd.supabase.co";
   const SUPABASE_ANON_KEY =
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVsdXZxcXlwZ2Rwc3h6dXRvamRkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAwNzY1MDgsImV4cCI6MjA4NTY1MjUwOH0.m49_Y868P0Vpw5vT3SuDDEXbsSN3VT80CMhPWP1HCH8";
-  const FREE_LIMIT = 5;
+  const FREE_LIMIT = 3;
   const AUTH_STORAGE_KEY = "fbco.auth.session.v1";
   const AUTH_EMAIL_KEY = "fbco.auth.email.v1";
   const AUTH_VALIDATED_UNTIL_KEY = "fbco.auth.validated.until.v1";
@@ -466,24 +466,9 @@
     if (!opts.retry) state.analysisRetrying = false;
 
     state.freeCount = loadFreeCount();
-    state.analysisGated = !state.authValidated && state.freeCount >= FREE_LIMIT;
-    if (state.analysisGated) {
-      state.analysisLoading = false;
-      state.analysisReady = true;
-      state.analysisError = "Free limit reached. Log in or subscribe to continue.";
-      state.analysisErrorAt = Date.now();
-      state.loadingPhase = "";
-      window.FBCO_updateOverlay(vehicle, {
-        loading: false,
-        ready: true,
-        error: state.analysisError,
-        data: state.lastAnalysis,
-        loadingText: "",
-        access: buildAccessInfo(state),
-        gated: state.analysisGated
-      });
-      return;
-    }
+    // Don't gate pre-flight — let the server enforce the limit.
+    // Client-side count is only used for display; gating only happens after a real 402 or analysis response.
+    state.analysisGated = false;
 
     if (
       !opts.force &&
@@ -650,6 +635,7 @@
 
       if (!state.authValidated && Number.isFinite(Number(freeRemainingHeader))) {
         const remaining = Math.max(0, Math.min(FREE_LIMIT, Number(freeRemainingHeader)));
+        console.log(`[StraightShot] Free analyses remaining today: ${remaining}/${FREE_LIMIT}`);
         saveFreeCount(FREE_LIMIT - remaining);
         saveLastFreeKey(key);
         markFreeQuotaSyncedToday();
@@ -920,7 +906,7 @@
     }
     if (state.authValidated) clearCheckoutPending();
     state.freeCount = loadFreeCount();
-    state.analysisGated = !state.authValidated && state.freeCount >= FREE_LIMIT;
+    // Gate is only set by server responses (402 or X-Free-Remaining header), not preemptively.
 
     // If access just unlocked, force a fresh analysis on current listing.
     if (state.authValidated && (!prevValidated || prevGated)) {

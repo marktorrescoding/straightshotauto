@@ -420,8 +420,8 @@
     const fallbackIcon =
       "data:image/svg+xml;utf8," +
       "<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64' viewBox='0 0 64 64'>" +
-      "<rect width='64' height='64' rx='12' fill='%23f1f3f5'/>" +
-      "<text x='32' y='38' font-size='22' text-anchor='middle' fill='%23333' font-family='Arial, sans-serif'>CS</text>" +
+      "<rect width='64' height='64' rx='12' fill='%23e8f0fe'/>" +
+      "<text x='32' y='42' font-size='32' text-anchor='middle'>🚗</text>" +
       "</svg>";
     const setIcons = () => {
       try {
@@ -1114,8 +1114,8 @@
     const fallbackIcon =
       "data:image/svg+xml;utf8," +
       "<svg xmlns='http://www.w3.org/2000/svg' width='64' height='64' viewBox='0 0 64 64'>" +
-      "<rect width='64' height='64' rx='12' fill='%23f1f3f5'/>" +
-      "<text x='32' y='38' font-size='22' text-anchor='middle' fill='%23333' font-family='Arial, sans-serif'>CS</text>" +
+      "<rect width='64' height='64' rx='12' fill='%23e8f0fe'/>" +
+      "<text x='32' y='42' font-size='32' text-anchor='middle'>🚗</text>" +
       "</svg>";
     const bindFallback = (img) => {
       if (!img || img.dataset.fbcoFallbackBound) return;
@@ -1286,13 +1286,14 @@
         subscriptionFlagEl.textContent = "Subscribed";
         subscriptionFlagEl.classList.add("fbco-status-subscribed");
       } else if (access?.freeRemaining > 0) {
-        subscriptionFlagEl.textContent = `${access.freeRemaining} free left`;
+        subscriptionFlagEl.textContent = `${access.freeRemaining}/3 free today`;
         subscriptionFlagEl.classList.add("fbco-status-neutral");
       } else if (access?.freeRemaining === 0) {
-        subscriptionFlagEl.textContent = "Limit reached";
+        subscriptionFlagEl.textContent = "Daily limit reached";
         subscriptionFlagEl.classList.add("fbco-status-unsubscribed");
       } else {
-        subscriptionFlagEl.textContent = "";
+        subscriptionFlagEl.textContent = "3 free/day";
+        subscriptionFlagEl.classList.add("fbco-status-neutral");
       }
     }
     if (authEmailEl) {
