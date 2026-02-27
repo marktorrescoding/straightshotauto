@@ -526,7 +526,6 @@ function computeEvidenceCoverage(snapshot) {
     { ok: hasKnownValue(drive), w: 0.08 },
     { ok: hasKnownValue(engine), w: 0.07 },
     { ok: hasKnownValue(snapshot?.title_status), w: 0.1 },
-    { ok: hasKnownValue(snapshot?.vin), w: 0.1 },
     { ok: hasKnownValue(snapshot?.seller_description), w: 0.08 },
     { ok: hasAbout, w: 0.05 },
     { ok: hasKnownValue(snapshot?.fuel_type), w: 0.04 },
@@ -545,7 +544,6 @@ function computeHeuristicDecisionScore(snapshot, out) {
   let score = 68;
   const miles = asNumber(snapshot?.mileage_miles, null);
   const title = deriveTitleStatus(snapshot);
-  const hasVin = hasKnownValue(snapshot?.vin);
   const hasRecords = Boolean(detectRecordsClaim(snapshot));
   const drive = inferredDrivetrain(snapshot);
   const modified = hasHeavyModificationSignals(snapshot);
@@ -565,7 +563,6 @@ function computeHeuristicDecisionScore(snapshot, out) {
   if (title === "lien") score -= 8;
   if (title === "rebuilt") score -= 18;
   if (title === "clean") score += 2;
-  if (!hasVin) score -= 2;
   if (!drive) score -= 2;
   if (hasRecords) score += 4;
   if (modified) score -= 3;
@@ -1794,7 +1791,6 @@ function normalizeVerdictTone(out, snapshot) {
 
   const grade = letterGradeFromScore(score);
   const title = deriveTitleStatus(snapshot);
-  const hasVin = hasKnownValue(snapshot?.vin);
   const hasDrive = hasKnownValue(inferredDrivetrain(snapshot));
   const miles = asNumber(snapshot?.mileage_miles, null);
   const reasons = [];
@@ -1814,7 +1810,6 @@ function normalizeVerdictTone(out, snapshot) {
 
   const uncertainty = [];
   if (title === "unknown") uncertainty.push("title is unverified");
-  if (!hasVin) uncertainty.push("VIN is missing");
   if (!hasDrive) uncertainty.push("drivetrain is unconfirmed");
 
   const primary = reasons.slice(0, 2);
