@@ -16,7 +16,6 @@
     authValidated: false,
     authMessage: "",
     freeCount: 0,
-    lastFreeSnapshotKey: null,
     analysisGated: false
   };
 
@@ -36,24 +35,6 @@
     };
   };
 
-  window.FBCO_copyToClipboard = async function (text) {
-    try {
-      await navigator.clipboard.writeText(text);
-      return true;
-    } catch {
-      // Fallback
-      const ta = document.createElement("textarea");
-      ta.value = text;
-      ta.style.position = "fixed";
-      ta.style.left = "-9999px";
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand("copy");
-      ta.remove();
-      return true;
-    }
-  };
-
   window.FBCO_formatUSD = function (n) {
     if (n == null) return null;
     return `$${Number(n).toLocaleString("en-US")}`;
@@ -71,12 +52,6 @@
     if (!m) return null;
     const num = Number(cleaned.replace("$", "").replace(/,/g, ""));
     return Number.isFinite(num) ? num : null;
-  };
-
-  window.FBCO_extractCurrencyFromText = function (text) {
-    if (!text) return null;
-    const m = text.match(/\$\s?\d{1,3}(?:,\d{3})*(?:\.\d{2})?/);
-    return m ? m[0] : null;
   };
 
   window.FBCO_hasLineThrough = function (el) {

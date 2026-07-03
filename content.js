@@ -7,7 +7,6 @@
   const AUTH_STATUS_URL = "https://car-bot.car-bot.workers.dev/auth/status";
   const BILLING_CHECKOUT_URL = "https://car-bot.car-bot.workers.dev/billing/checkout";
   const BILLING_PORTAL_URL = "https://car-bot.car-bot.workers.dev/billing/portal";
-  const AUTH_CALLBACK_URL = "https://car-bot.car-bot.workers.dev/auth/callback";
   const AUTH_SIGNUP_URL = "https://car-bot.car-bot.workers.dev/auth/signup";
   const SUPABASE_URL = "https://uluvqqypgdpsxzutojdd.supabase.co";
   const SUPABASE_ANON_KEY =
@@ -21,7 +20,6 @@
   const FREE_DAY_KEY = "fbco.free.day.v1";
   const FREE_SYNC_DAY_KEY = "fbco.free.sync.day.v1";
   const CHECKOUT_PENDING_KEY = "fbco.checkout.pending.v1";
-  const AUTH_MODE = "password";
   const NAV_CLEAR_MS = 1500;
   let authHydrationPromise = null;
   let activeAnalyzeController = null;
@@ -82,7 +80,13 @@
     if (!vehicle.year || !vehicle.make) return null;
     if (window.FBCO_makeSnapshotKey) {
       const key = window.FBCO_makeSnapshotKey(vehicle);
-      if (key) return key;
+      // Append data-completeness flags: without them this key never changes as
+      // the page finishes loading, so the full-data re-analysis never fires.
+      if (key) {
+        return `${key}|p:${vehicle.price_usd > 0 ? 1 : 0}|m:${vehicle.mileage_miles > 0 ? 1 : 0}|s:${
+          vehicle.seller_description ? 1 : 0
+        }`;
+      }
     }
     const normalizeListingId = (url) => {
       if (!url) return "";
@@ -135,7 +139,6 @@
       freeQuotaSynced: quotaSynced,
       email: activeSession?.user?.email || "",
       message: state?.authMessage || "",
-      authMode: AUTH_MODE,
       lastEmail: window.FBCO_storage.get(AUTH_EMAIL_KEY, "")
     };
   }
@@ -323,46 +326,6 @@
     return refreshSession(session);
   }
 
-  async function sendLoginCode(email) {
-    if (!SUPABASE_URL || SUPABASE_URL.includes("YOUR_SUPABASE") || !SUPABASE_ANON_KEY || SUPABASE_ANON_KEY.includes("YOUR_SUPABASE")) {
-      throw new Error("Auth not configured");
-    }
-    if (email) window.FBCO_storage.set(AUTH_EMAIL_KEY, email);
-    const res = await fetch(`${SUPABASE_URL}/auth/v1/otp`, {
-      method: "POST",
-      headers: {
-        apikey: SUPABASE_ANON_KEY,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        email,
-        create_user: true,
-        email_redirect_to: AUTH_CALLBACK_URL
-      })
-    });
-    if (!res.ok) throw new Error("Unable to send magic link");
-  }
-
-  async function verifyLoginCode(email, code) {
-    if (!SUPABASE_URL || SUPABASE_URL.includes("YOUR_SUPABASE") || !SUPABASE_ANON_KEY || SUPABASE_ANON_KEY.includes("YOUR_SUPABASE")) {
-      throw new Error("Auth not configured");
-    }
-    const res = await fetch(`${SUPABASE_URL}/auth/v1/verify`, {
-      method: "POST",
-      headers: {
-        apikey: SUPABASE_ANON_KEY,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ type: "email", email, token: code })
-    });
-    if (!res.ok) throw new Error("Invalid code");
-    const data = await res.json();
-    const session = normalizeAuthSession(data);
-    if (!session) throw new Error("Invalid login session");
-    saveAuthSession(session);
-    return session;
-  }
-
   async function loginWithPassword(email, password) {
     if (!SUPABASE_URL || SUPABASE_URL.includes("YOUR_SUPABASE") || !SUPABASE_ANON_KEY || SUPABASE_ANON_KEY.includes("YOUR_SUPABASE")) {
       throw new Error("Auth not configured");
@@ -428,6 +391,28 @@
     } else {
       window.open(checkoutUrl, "_blank", "noopener,noreferrer");
     }
+  }
+
+  // Transient failures (timeout, network, 5xx, rate limit) get up to 2 automatic
+  // retries per listing. Without this, the analysisRequestedKey/analysisError
+  // guards in requestAnalysis permanently block re-requests for the listing.
+  function scheduleAnalysisRetry(vehicle, key, delayMs) {
+    const state = window.FBCO_STATE;
+    if (state.analysisRetryKey !== key) {
+      state.analysisRetryKey = key;
+      state.analysisRetryCount = 0;
+    }
+    if ((state.analysisRetryCount || 0) >= 2) return false;
+    state.analysisRetryCount = (state.analysisRetryCount || 0) + 1;
+    state.analysisRetrying = true;
+    state.loadingPhase = "Retrying analysis…";
+    setTimeout(() => {
+      const st = window.FBCO_STATE;
+      if (!st || st.lastSnapshotKey !== key || st.dismissed) return;
+      st.analysisRetrying = false;
+      requestAnalysis(vehicle, { force: true, retry: true });
+    }, delayMs);
+    return true;
   }
 
   async function requestAnalysis(vehicle, opts = {}) {
@@ -567,12 +552,15 @@
           retryAfterSeconds = Number(res.headers.get("Retry-After")) || retryAfterSeconds;
         }
         state.analysisError = "Rate limited";
-        state.analysisErrorAt = Date.now();
         state.analysisReady = true;
         state.analysisRetrying = false;
         state.analysisLoading = false;
         state.loadingPhase = "";
         state.nextAnalyzeAt = Date.now() + Math.max(8, retryAfterSeconds) * 1000;
+        if (scheduleAnalysisRetry(vehicle, key, Math.max(8, retryAfterSeconds) * 1000 + 500)) {
+          state.analysisError = null;
+          state.analysisReady = false;
+        }
         window.FBCO_updateOverlay(vehicle, {
           loading: false,
           ready: true,
@@ -595,7 +583,6 @@
         state.freeCount = loadFreeCount();
         state.analysisGated = !state.authValidated && state.freeCount >= FREE_LIMIT;
         state.analysisError = msg;
-        state.analysisErrorAt = Date.now();
         state.analysisReady = true;
         state.analysisRetrying = false;
         state.analysisLoading = false;
@@ -633,7 +620,9 @@
       const complete = isCompleteAnalysis(data);
       state.analysisReady = complete;
 
-      if (!state.authValidated && Number.isFinite(Number(freeRemainingHeader))) {
+      // Note: freeRemainingHeader must be null-checked — Number(null) is 0, which
+      // would wrongly mark the whole daily quota as used when the header is absent.
+      if (!state.authValidated && freeRemainingHeader != null && Number.isFinite(Number(freeRemainingHeader))) {
         const remaining = Math.max(0, Math.min(FREE_LIMIT, Number(freeRemainingHeader)));
         console.log(`[StraightShot] Free analyses remaining today: ${remaining}/${FREE_LIMIT}`);
         saveFreeCount(FREE_LIMIT - remaining);
@@ -656,7 +645,6 @@
       if (!complete) {
         state.analysisRetrying = false;
         state.analysisError = "Incomplete response";
-        state.analysisErrorAt = Date.now();
         state.analysisReady = true;
       }
     } catch (err) {
@@ -666,8 +654,11 @@
       } else {
         state.analysisError = err?.message || "Request failed";
       }
-      state.analysisErrorAt = Date.now();
       state.analysisReady = true;
+      if (scheduleAnalysisRetry(vehicle, key, 8000)) {
+        state.analysisError = null;
+        state.analysisReady = false;
+      }
     } finally {
       clearTimeout(timeoutId);
       clearTimeout(phaseTimer);
@@ -714,7 +705,6 @@
     state.nextAnalyzeAt = 0;
     if (reason) {
       state.analysisError = reason;
-      state.analysisErrorAt = Date.now();
       state.analysisReady = true;
     }
     window.FBCO_ANALYZE_INFLIGHT = false;
@@ -752,7 +742,10 @@
     // Avoid updating while user is selecting text inside overlay
     if (state.isUserSelecting) return;
 
-    window.FBCO_STATE.loadingPhase = "Parsing listing…";
+    // Don't stomp the phase text while an analysis request is showing progress.
+    if (!state.analysisLoading && !state.analysisRetrying) {
+      state.loadingPhase = "Parsing listing…";
+    }
     let vehicle = window.FBCO_extractVehicleSnapshot();
     const suppressVehicle = Number(state.suppressVehicleUntil || 0) > Date.now();
 
@@ -773,7 +766,6 @@
       state.parsePendingSince = null;
       if (typeof state.analysisError === "string" && state.analysisError.includes("Couldn’t read listing details")) {
         state.analysisError = null;
-        state.analysisErrorAt = null;
         state.analysisReady = false;
       }
     } else if (!suppressVehicle) {
@@ -784,7 +776,6 @@
         state.analysisReady = true;
         state.loadingPhase = "";
         state.analysisError = "Couldn’t read listing details yet. Scroll the listing once, then press Refresh.";
-        state.analysisErrorAt = Date.now();
       }
     }
 
@@ -794,7 +785,6 @@
       state.analysisRetryKey = snapshotKey;
       state.analysisRetryCount = 0;
       state.analysisRetrying = false;
-      state.analysisErrorAt = null;
       state.lastAnalysis = null;
       state.analysisReady = false;
       state.analysisRequestedKey = null;
@@ -830,6 +820,16 @@
     }
 
     if (!suppressVehicle && vehicle?.year && vehicle?.make) {
+      // Give Facebook a moment to finish rendering price/mileage/description
+      // before spending an analysis (and a free-quota slot) on partial data.
+      const snapshotComplete =
+        vehicle.price_usd > 0 && vehicle.mileage_miles > 0 && Boolean(vehicle.seller_description);
+      if (!snapshotComplete) {
+        if (!state.snapshotPendingSince) state.snapshotPendingSince = Date.now();
+        if (Date.now() - state.snapshotPendingSince < 4000) return;
+      } else {
+        state.snapshotPendingSince = null;
+      }
       if (state.forceAnalysisNext) {
         state.forceAnalysisNext = false;
         requestAnalysis(vehicle, { force: true });
@@ -913,7 +913,6 @@
       state.forceAnalysisNext = true;
       state.analysisRequestedKey = null;
       state.analysisError = null;
-      state.analysisErrorAt = null;
       if (!state.lastAnalysis) state.analysisReady = false;
     }
   }
@@ -963,7 +962,6 @@
     state.forceAnalysisNext = true;
     state.analysisRequestedKey = null;
     state.analysisError = null;
-    state.analysisErrorAt = null;
     if (!state.lastAnalysis) state.analysisReady = false;
     scheduleUpdate();
   };
@@ -1112,10 +1110,16 @@
     state.lastVehicle = null;
     state.loadingPhase = "Parsing listing…";
     state.suppressVehicleUntil = Date.now() + NAV_CLEAR_MS;
+    // Bypass the min-interval throttle and stale-key guards so a manual
+    // refresh always re-requests, and drop any rate-limit backoff.
+    state.forceAnalysisNext = true;
+    state.nextAnalyzeAt = 0;
+    state.analysisRetryCount = 0;
     runUpdate();
   };
 
   const scheduleUpdate = debounce(runUpdate, UPDATE_DEBOUNCE_MS);
+  window.FBCO_scheduleUpdate = scheduleUpdate;
 
   // Initial run
   if (isItemPage() && window.FBCO_updateOverlay) {
@@ -1167,6 +1171,7 @@
       window.FBCO_STATE.lastAnalysis = null;
       window.FBCO_STATE.lastRenderKey = null;
       window.FBCO_STATE.suppressVehicleUntil = Date.now() + NAV_CLEAR_MS;
+      window.FBCO_STATE.snapshotPendingSince = null;
       window.FBCO_STATE.loadingPhase = "Parsing listing…";
     }
     window.FBCO_removeOverlay && window.FBCO_removeOverlay();

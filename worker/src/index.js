@@ -18,7 +18,7 @@ const SYSTEM_PROMPT =
   ].join("\n");
 
 const CACHE_TTL_SECONDS = 60 * 60 * 24;
-const CACHE_VERSION = "v19"; // bump for RAV4 AWD inference, lifespan worst-case fix, price opinion text, recent-vehicle reputation prompt
+const CACHE_VERSION = "v20"; // bump for fuel/mpg/nhtsa/paid_off fields now included in snapshot + evidence coverage
 const FREE_DAILY_LIMIT = 3;
 const RATE_MIN_INTERVAL_MS = 0;
 const RATE_WINDOW_MS = 60 * 60 * 1000;
@@ -67,6 +67,10 @@ function corsHeaders(origin) {
     "Access-Control-Allow-Origin": allowOrigin,
     "Access-Control-Allow-Methods": "POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    // Without this, cross-origin JS (the content script) cannot read the
+    // custom X-* headers the extension relies on for quota/validation state.
+    "Access-Control-Expose-Headers":
+      "X-Cache, X-Dedupe, X-Request-Id, X-Snapshot-Key, X-User-Validated, X-Free-Remaining",
     "Access-Control-Max-Age": "86400"
   };
 }
@@ -1001,10 +1005,6 @@ function hasActiveSymptom(snapshot) {
   }
 
   return true;
-}
-
-function currentYear() {
-  return new Date().getFullYear();
 }
 
 function hasRecentMaintenanceClaim(snapshot) {
@@ -2606,6 +2606,7 @@ export default {
       }
 
       if (url.pathname === "/quota/status") {
+        const cache = caches.default;
         const ip = getClientIp(request);
         const ua = (request.headers.get("User-Agent") || "").slice(0, 180);
         const bucketSource = `${utcDayStampNow()}|${ip}|${ua}`;
@@ -2791,6 +2792,14 @@ export default {
         price_usd: payload?.price_usd ?? null,
         mileage_miles: payload?.mileage_miles ?? null,
         vin: payload?.vin || null,
+        fuel_type: payload?.fuel_type || null,
+        exterior_color: payload?.exterior_color || null,
+        interior_color: payload?.interior_color || null,
+        mpg_city: payload?.mpg_city ?? null,
+        mpg_highway: payload?.mpg_highway ?? null,
+        mpg_combined: payload?.mpg_combined ?? null,
+        nhtsa_rating: payload?.nhtsa_rating ?? null,
+        paid_off: payload?.paid_off ?? null,
         seller_description: payload?.seller_description || null,
         about_items: payload?.about_items || [],
         provenance: payload?.provenance || null,

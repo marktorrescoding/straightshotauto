@@ -657,13 +657,11 @@
       saveOverlayState(st);
       applyOverlayState(root, st);
 
-      // Force a refresh of values immediately on restore
-      const v = window.FBCO_extractVehicleSnapshot();
-      window.FBCO_updateOverlay(v, {
-        loading: window.FBCO_STATE.analysisLoading,
-        error: window.FBCO_STATE.analysisError,
-        data: window.FBCO_STATE.lastAnalysis
-      });
+      // Force a full re-render on restore. content.js owns the ready/access
+      // state, so let it rebuild the overlay instead of rendering here with
+      // partial analysisState (which left the panel stuck in a loading look).
+      window.FBCO_STATE.lastRenderKey = null;
+      window.FBCO_scheduleUpdate && window.FBCO_scheduleUpdate();
     };
     miniBtn?.addEventListener("click", onRestore);
     if (miniBtn) cleanupFns.push(() => miniBtn.removeEventListener("click", onRestore));
@@ -1341,7 +1339,9 @@
     if (errorEl) {
       if (error) {
         errorEl.textContent = `Unable to analyze listing: ${error}. Try refresh.`;
-        setVisible(errorEl, true);
+        // Stylesheet defaults .fbco-error to display:none, so an empty inline
+        // style ("" via setVisible) would keep it hidden — set block explicitly.
+        errorEl.style.display = "block";
       } else {
         setVisible(errorEl, false);
       }
