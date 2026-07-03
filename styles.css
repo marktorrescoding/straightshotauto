@@ -938,3 +938,119 @@
   width: 58px;
   height: 58px;
 }
+
+/* --- v0.6.0 layout overhaul --- */
+
+#fb-car-overlay-mvp .fbco-verdict-pill {
+  margin: 8px 0 6px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(0,0,0,0.08);
+  background: rgba(0,0,0,0.04);
+  color: rgba(0,0,0,0.65);
+  font-size: 13.5px;
+  font-weight: 800;
+  letter-spacing: 0.1px;
+  text-align: center;
+}
+
+#fb-car-overlay-mvp .fbco-verdict-pill[data-tone="good"] {
+  background: #e9f9ef;
+  color: #1a7f37;
+  border-color: #b7ebc6;
+}
+
+#fb-car-overlay-mvp .fbco-verdict-pill[data-tone="fair"] {
+  background: #fff6d6;
+  color: #8a6d00;
+  border-color: #ffe58f;
+}
+
+#fb-car-overlay-mvp .fbco-verdict-pill[data-tone="risky"] {
+  background: #fff1e6;
+  color: #b54708;
+  border-color: #ffd7b5;
+}
+
+#fb-car-overlay-mvp .fbco-verdict-pill[data-tone="no"] {
+  background: #fdecea;
+  color: #b42318;
+  border-color: #f5c2c7;
+}
+
+#fb-car-overlay-mvp .fbco-value-line {
+  margin: 8px 0 2px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(0,0,0,0.03);
+  border: 1px solid rgba(0,0,0,0.06);
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(0,0,0,0.75);
+}
+
+#fb-car-overlay-mvp .fbco-hint {
+  margin: 4px 0 6px;
+  font-size: 11px;
+  color: rgba(0,0,0,0.5);
+  line-height: 1.4;
+}
+
+#fb-car-overlay-mvp #fbco-lifespan {
+  white-space: pre-line;
+}
+
+#fb-car-overlay-mvp #fbco-rep-block {
+  margin-bottom: 6px;
+}
+
+#fb-car-overlay-mvp .fbco-chat {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(0,0,0,0.08);
+  background: #fff;
+}
+
+#fb-car-overlay-mvp .fbco-chat-messages {
+  max-height: 190px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+#fb-car-overlay-mvp .fbco-chat-msg {
+  padding: 7px 10px;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  max-width: 92%;
+  white-space: pre-line;
+}
+
+#fb-car-overlay-mvp .fbco-chat-msg-user {
+  align-self: flex-end;
+  background: #e8f0fe;
+  color: #1a3c8b;
+  border: 1px solid #cfe0fc;
+}
+
+#fb-car-overlay-mvp .fbco-chat-msg-bot {
+  align-self: flex-start;
+  background: rgba(0,0,0,0.04);
+  color: rgba(0,0,0,0.8);
+  border: 1px solid rgba(0,0,0,0.07);
+}
+
+#fb-car-overlay-mvp .fbco-chat-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+#fb-car-overlay-mvp .fbco-chat-input {
+  flex: 1;
+  min-width: 0;
+}

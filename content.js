@@ -4,6 +4,7 @@
   window.FBCO_CONTENT_LOADED = true;
   const UPDATE_DEBOUNCE_MS = 300;
   const API_URL = "https://car-bot.car-bot.workers.dev/analyze";
+  const CHAT_URL = "https://car-bot.car-bot.workers.dev/chat";
   const AUTH_STATUS_URL = "https://car-bot.car-bot.workers.dev/auth/status";
   const BILLING_CHECKOUT_URL = "https://car-bot.car-bot.workers.dev/billing/checkout";
   const BILLING_PORTAL_URL = "https://car-bot.car-bot.workers.dev/billing/portal";
@@ -1094,6 +1095,55 @@
     }, 4000);
   }
 
+  // Mini mechanic chat: sends the buyer's question plus listing/analysis
+  // context to the worker. The overlay owns the UI; this owns transport/auth.
+  window.FBCO_mechanicChat = async function (question, history) {
+    const state = window.FBCO_STATE;
+    const v = state?.lastVehicle || {};
+    const a = state?.lastAnalysis || {};
+    try {
+      const session = await getValidSession();
+      const res = await fetch(CHAT_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {})
+        },
+        body: JSON.stringify({
+          question: String(question || "").slice(0, 600),
+          messages: (history || []).slice(-8),
+          vehicle: {
+            year: v.year,
+            make: v.make,
+            model: v.model,
+            trim: v.trim,
+            price_usd: v.price_usd,
+            mileage_miles: v.mileage_miles,
+            transmission: v.transmission,
+            drivetrain: v.drivetrain,
+            engine: v.engine,
+            fuel_type: v.fuel_type,
+            title_status: v.title_status,
+            seller_description: v.seller_description
+          },
+          analysis: {
+            summary: a.summary,
+            final_verdict: a.final_verdict,
+            overall_score: a.overall_score,
+            deal_grade: a.deal_grade,
+            risk_flags: a.risk_flags,
+            deal_breakers: a.deal_breakers
+          }
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return { ok: false, error: data?.error || `HTTP ${res.status}` };
+      return { ok: true, reply: (data?.reply || "").toString() };
+    } catch (err) {
+      return { ok: false, error: err?.message || "Network error" };
+    }
+  };
+
   window.FBCO_insertMessage = insertMessage;
   window.FBCO_requestRefresh = function () {
     const state = window.FBCO_STATE;
@@ -1172,6 +1222,7 @@
       window.FBCO_STATE.lastRenderKey = null;
       window.FBCO_STATE.suppressVehicleUntil = Date.now() + NAV_CLEAR_MS;
       window.FBCO_STATE.snapshotPendingSince = null;
+      window.FBCO_STATE.chatHistory = [];
       window.FBCO_STATE.loadingPhase = "Parsing listing…";
     }
     window.FBCO_removeOverlay && window.FBCO_removeOverlay();

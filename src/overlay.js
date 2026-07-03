@@ -117,7 +117,7 @@
             </div>
           </div>
           <div class="fbco-actions">
-            <button id="fbco-profile" class="fbco-icon-btn" type="button" aria-label="Profile" title="Profile">👤</button>
+            <button id="fbco-profile" class="fbco-icon-btn" type="button" aria-label="Account" title="Account"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.2 4-6.5 8-6.5s8 2.3 8 6.5"/></svg></button>
             <button id="fbco-refresh" class="fbco-icon-btn" type="button" aria-label="Refresh" title="Refresh">↻</button>
             <button id="fbco-download" class="fbco-icon-btn" type="button" aria-label="Download PDF" title="Download PDF">↓</button>
             <button id="fbco-minimize" class="fbco-icon-btn" type="button" aria-label="Minimize" title="Minimize">–</button>
@@ -158,11 +158,12 @@
           <div class="fbco-card fbco-card-primary" id="fbco-summary-card">
             <div class="fbco-card-header">
               <div class="fbco-vehicle-title" id="fbco-vehicle-title">—</div>
-              <div class="fbco-badges fbco-blurable">
-                <span id="fbco-score-badge" class="fbco-badge">--</span>
-                <span id="fbco-confidence-badge" class="fbco-badge fbco-badge-muted">--</span>
-                <span id="fbco-verdict-badge" class="fbco-badge fbco-badge-muted">Verdict</span>
-              </div>
+            </div>
+            <div class="fbco-verdict-pill fbco-blurable" id="fbco-verdict-pill" data-tone="muted">Analyzing listing…</div>
+            <div class="fbco-badges fbco-blurable">
+              <span id="fbco-score-badge" class="fbco-badge">--</span>
+              <span id="fbco-confidence-badge" class="fbco-badge fbco-badge-muted">--</span>
+              <span id="fbco-verdict-badge" class="fbco-badge fbco-badge-muted">Risk</span>
             </div>
             <div class="fbco-meta-row">
               <div class="fbco-meta-item">
@@ -178,89 +179,70 @@
                 <strong id="fbco-meta-title-status">—</strong>
               </div>
             </div>
-            <div class="fbco-assumption" id="fbco-assumption">
-              This assessment assumes no major undisclosed damage. A pre-purchase inspection is still recommended.
+            <div class="fbco-value-line fbco-blurable" id="fbco-value-line">—</div>
+            <div class="fbco-summary-block fbco-blurable" id="fbco-verdict-block">
+              <div class="fbco-section-label">Bottom line</div>
+              <div id="fbco-final-verdict" class="fbco-text">—</div>
             </div>
             <div class="fbco-summary-block" id="fbco-summary-block">
               <div class="fbco-section-label">Summary</div>
               <div id="fbco-summary" class="fbco-text">—</div>
             </div>
-            <div class="fbco-summary-block fbco-blurable" id="fbco-verdict-block">
-              <div class="fbco-section-label">Final verdict</div>
-              <div id="fbco-final-verdict" class="fbco-text">—</div>
+            <div class="fbco-assumption" id="fbco-assumption">
+              Based on the listing text only. A pre-purchase inspection is still recommended.
             </div>
           </div>
 
           <div class="fbco-tags fbco-blurable" id="fbco-analysis-tags"></div>
 
-          <div class="fbco-accordion fbco-blurable" id="fbco-acc-deal">
-            <button class="fbco-accordion-toggle" type="button" data-target="fbco-deal-body" aria-expanded="true">
-              <span>Deal breakers</span>
+          <div class="fbco-accordion fbco-blurable" id="fbco-acc-concerns">
+            <button class="fbco-accordion-toggle" type="button" data-target="fbco-concerns-body" aria-expanded="true">
+              <span>Top concerns</span>
               <span class="fbco-accordion-icon">▾</span>
             </button>
-            <div id="fbco-deal-body" class="fbco-accordion-body">
-              <ul id="fbco-analysis-dealbreakers" class="fbco-list fbco-list-deal"></ul>
+            <div id="fbco-concerns-body" class="fbco-accordion-body">
+              <ul id="fbco-analysis-concerns" class="fbco-list fbco-list-deal"></ul>
             </div>
           </div>
 
-          <div class="fbco-accordion fbco-blurable" id="fbco-acc-risk">
-            <button class="fbco-accordion-toggle" type="button" data-target="fbco-risk-body" aria-expanded="true">
-              <span>Risk flags</span>
+          <div class="fbco-accordion fbco-blurable" id="fbco-acc-known">
+            <button class="fbco-accordion-toggle" type="button" data-target="fbco-known-body" aria-expanded="true">
+              <span>Known issues for this year/model</span>
               <span class="fbco-accordion-icon">▾</span>
             </button>
-            <div id="fbco-risk-body" class="fbco-accordion-body">
-              <ul id="fbco-analysis-risks" class="fbco-list fbco-list-risk"></ul>
-            </div>
-          </div>
-
-          <div class="fbco-accordion fbco-blurable" id="fbco-acc-upsides">
-            <button class="fbco-accordion-toggle" type="button" data-target="fbco-upsides-body" aria-expanded="false">
-              <span>Upsides</span>
-              <span class="fbco-accordion-icon">▾</span>
-            </button>
-            <div id="fbco-upsides-body" class="fbco-accordion-body" hidden>
-              <ul id="fbco-analysis-upsides" class="fbco-list fbco-list-good"></ul>
-            </div>
-          </div>
-
-          <div class="fbco-accordion fbco-blurable" id="fbco-acc-market">
-            <button class="fbco-accordion-toggle" type="button" data-target="fbco-market-body" aria-expanded="false">
-              <span>Market value & price opinion</span>
-              <span class="fbco-accordion-icon">▾</span>
-            </button>
-            <div id="fbco-market-body" class="fbco-accordion-body" hidden>
-              <div class="fbco-kv">
-                <span>Market value</span>
-                <div id="fbco-analysis-market" class="fbco-text">—</div>
-              </div>
-              <div class="fbco-kv">
-                <span>Price opinion</span>
-                <div id="fbco-analysis-price" class="fbco-text">—</div>
-              </div>
-            </div>
-          </div>
-
-          <div class="fbco-accordion fbco-blurable" id="fbco-acc-overview">
-            <button class="fbco-accordion-toggle" type="button" data-target="fbco-overview-body" aria-expanded="false">
-              <span>Overview</span>
-              <span class="fbco-accordion-icon">▾</span>
-            </button>
-            <div id="fbco-overview-body" class="fbco-accordion-body" hidden>
-              <div class="fbco-kv" id="fbco-kv-rep">
-                <span>Year/model reputation</span>
+            <div id="fbco-known-body" class="fbco-accordion-body">
+              <div id="fbco-rep-block">
                 <div id="fbco-year-rep" class="fbco-text">—</div>
               </div>
+              <ul id="fbco-analysis-issues" class="fbco-list"></ul>
+            </div>
+          </div>
+
+          <div class="fbco-accordion fbco-blurable" id="fbco-acc-outlook">
+            <button class="fbco-accordion-toggle" type="button" data-target="fbco-outlook-body" aria-expanded="false">
+              <span>Ownership outlook & upcoming costs</span>
+              <span class="fbco-accordion-icon">▾</span>
+            </button>
+            <div id="fbco-outlook-body" class="fbco-accordion-body" hidden>
               <div class="fbco-kv" id="fbco-kv-lifespan">
-                <span>Remaining lifespan</span>
+                <span>How much life is left</span>
                 <div id="fbco-lifespan" class="fbco-text">—</div>
               </div>
               <div class="fbco-kv" id="fbco-kv-daily">
-                <span>Daily vs project</span>
+                <span>Daily driver or project</span>
                 <div id="fbco-daily-project" class="fbco-text">—</div>
               </div>
               <div class="fbco-kv" id="fbco-kv-skill">
-                <span>Mechanical skill</span>
+                <span>Mechanical skill needed</span>
                 <div id="fbco-skill" class="fbco-text">—</div>
+              </div>
+              <div class="fbco-kv" id="fbco-maint-block">
+                <span>Likely costs in the next 6–18 months</span>
+                <ul id="fbco-analysis-maintenance" class="fbco-list"></ul>
+              </div>
+              <div class="fbco-kv" id="fbco-wear-block">
+                <span>Wear items to budget for</span>
+                <ul id="fbco-analysis-wear" class="fbco-list"></ul>
               </div>
               <div class="fbco-kv" id="fbco-notes-block">
                 <span>Notes</span>
@@ -269,49 +251,30 @@
             </div>
           </div>
 
-          <div class="fbco-accordion fbco-blurable" id="fbco-acc-common">
-            <button class="fbco-accordion-toggle" type="button" data-target="fbco-common-body" aria-expanded="false">
-              <span>Common issues</span>
+          <div class="fbco-accordion fbco-blurable" id="fbco-acc-good">
+            <button class="fbco-accordion-toggle" type="button" data-target="fbco-good-body" aria-expanded="false">
+              <span>Good signs</span>
               <span class="fbco-accordion-icon">▾</span>
             </button>
-            <div id="fbco-common-body" class="fbco-accordion-body" hidden>
-              <ul id="fbco-analysis-issues" class="fbco-list"></ul>
-            </div>
-          </div>
-
-          <div class="fbco-accordion fbco-blurable" id="fbco-acc-wear">
-            <button class="fbco-accordion-toggle" type="button" data-target="fbco-wear-body" aria-expanded="false">
-              <span>Wear items</span>
-              <span class="fbco-accordion-icon">▾</span>
-            </button>
-            <div id="fbco-wear-body" class="fbco-accordion-body" hidden>
-              <ul id="fbco-analysis-wear" class="fbco-list"></ul>
-            </div>
-          </div>
-
-          <div class="fbco-accordion fbco-blurable" id="fbco-acc-maintenance">
-            <button class="fbco-accordion-toggle" type="button" data-target="fbco-maintenance-body" aria-expanded="false">
-              <span>Likely maintenance (6–18 months)</span>
-              <span class="fbco-accordion-icon">▾</span>
-            </button>
-            <div id="fbco-maintenance-body" class="fbco-accordion-body" hidden>
-              <ul id="fbco-analysis-maintenance" class="fbco-list"></ul>
+            <div id="fbco-good-body" class="fbco-accordion-body" hidden>
+              <ul id="fbco-analysis-upsides" class="fbco-list fbco-list-good"></ul>
             </div>
           </div>
 
           <div class="fbco-accordion fbco-blurable" id="fbco-acc-questions">
             <button class="fbco-accordion-toggle" type="button" data-target="fbco-questions-body" aria-expanded="false">
-              <span>Buyer questions</span>
+              <span>Ask the seller</span>
               <span class="fbco-accordion-icon">▾</span>
             </button>
             <div id="fbco-questions-body" class="fbco-accordion-body" hidden>
+              <div class="fbco-hint">Click a question to drop it into the Facebook message box.</div>
               <ul id="fbco-analysis-questions" class="fbco-list fbco-list-pill"></ul>
             </div>
           </div>
 
           <div class="fbco-accordion fbco-blurable" id="fbco-acc-inspection">
             <button class="fbco-accordion-toggle" type="button" data-target="fbco-inspection-body" aria-expanded="false">
-              <span>Inspection checklist</span>
+              <span>Before you buy: inspection checklist</span>
               <span class="fbco-accordion-icon">▾</span>
             </button>
             <div id="fbco-inspection-body" class="fbco-accordion-body" hidden>
@@ -396,6 +359,17 @@
               <div class="fbco-label">Seller notes</div>
               <div id="fbco-seller-notes" class="fbco-note">(not found)</div>
             </div>
+          </div>
+
+          <div class="fbco-chat fbco-blurable" id="fbco-chat">
+            <div class="fbco-section-label">Ask the mechanic</div>
+            <div id="fbco-chat-messages" class="fbco-chat-messages" hidden></div>
+            <div class="fbco-chat-row">
+              <input id="fbco-chat-input" class="fbco-input fbco-chat-input" type="text"
+                placeholder="e.g. Is fixing the transmission worth it at this price?" maxlength="500" />
+              <button id="fbco-chat-send" class="fbco-btn fbco-btn-primary" type="button">Ask</button>
+            </div>
+            <div class="fbco-hint">Answers use this listing's details only. Not a substitute for an inspection.</div>
           </div>
 
           <div class="fbco-disclaimer">
@@ -625,6 +599,63 @@
     };
     resetBtn?.addEventListener("click", onReset);
     if (resetBtn) cleanupFns.push(() => resetBtn.removeEventListener("click", onReset));
+
+    // Mini mechanic chat
+    const chatInput = root.querySelector("#fbco-chat-input");
+    const chatSend = root.querySelector("#fbco-chat-send");
+    const chatMessages = root.querySelector("#fbco-chat-messages");
+    const appendChatMsg = (role, text) => {
+      if (!chatMessages) return null;
+      chatMessages.hidden = false;
+      const div = document.createElement("div");
+      div.className = role === "user" ? "fbco-chat-msg fbco-chat-msg-user" : "fbco-chat-msg fbco-chat-msg-bot";
+      div.textContent = text;
+      chatMessages.appendChild(div);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+      return div;
+    };
+    // Restore this listing's conversation if the overlay was rebuilt.
+    window.FBCO_STATE.chatBusy = false;
+    if (!Array.isArray(window.FBCO_STATE.chatHistory)) window.FBCO_STATE.chatHistory = [];
+    window.FBCO_STATE.chatHistory.forEach((m) => {
+      appendChatMsg(m.role === "assistant" ? "bot" : "user", m.content);
+    });
+    const sendChat = async () => {
+      const q = (chatInput?.value || "").trim();
+      if (!q || window.FBCO_STATE.chatBusy || typeof window.FBCO_mechanicChat !== "function") return;
+      window.FBCO_STATE.chatBusy = true;
+      if (chatInput) chatInput.value = "";
+      if (chatSend) chatSend.disabled = true;
+      appendChatMsg("user", q);
+      const history = window.FBCO_STATE.chatHistory.slice();
+      window.FBCO_STATE.chatHistory.push({ role: "user", content: q });
+      const thinking = appendChatMsg("bot", "Thinking…");
+      const result = await window.FBCO_mechanicChat(q, history);
+      if (thinking) thinking.remove();
+      if (result?.ok && result.reply) {
+        appendChatMsg("bot", result.reply);
+        window.FBCO_STATE.chatHistory.push({ role: "assistant", content: result.reply });
+      } else {
+        appendChatMsg("bot", result?.error || "Unavailable right now — try again in a moment.");
+      }
+      window.FBCO_STATE.chatBusy = false;
+      if (chatSend) chatSend.disabled = false;
+      chatInput?.focus();
+    };
+    const onChatSend = (e) => {
+      e.stopPropagation();
+      sendChat();
+    };
+    const onChatKeydown = (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        sendChat();
+      }
+    };
+    chatSend?.addEventListener("click", onChatSend);
+    chatInput?.addEventListener("keydown", onChatKeydown);
+    if (chatSend) cleanupFns.push(() => chatSend.removeEventListener("click", onChatSend));
+    if (chatInput) cleanupFns.push(() => chatInput.removeEventListener("keydown", onChatKeydown));
 
     const accordionToggles = Array.from(root.querySelectorAll(".fbco-accordion-toggle"));
     accordionToggles.forEach((btn) => {
@@ -866,6 +897,7 @@
       body { padding: 16px; display: flex; justify-content: center; }
       #fb-car-overlay-mvp { box-shadow: none !important; border-radius: 12px !important; }
       #fb-car-overlay-mvp .fbco-actions { display: none !important; }
+      #fb-car-overlay-mvp .fbco-chat { display: none !important; }
       @page { margin: 10mm; size: auto; }
     </style>
   </head>
@@ -1004,11 +1036,7 @@
         let displayText = text;
         let messageText = text;
         let showDollar = false;
-        if (text.startsWith("💵")) {
-          displayText = text.replace(/^💵\s*/, "");
-          messageText = displayText;
-          showDollar = true;
-        } else if (text.startsWith("$")) {
+        if (text.startsWith("$")) {
           displayText = text.replace(/^\$\s*/, "");
           messageText = displayText;
           showDollar = true;
@@ -1184,14 +1212,13 @@
     const wearEl = document.getElementById("fbco-analysis-wear");
     const checklistEl = document.getElementById("fbco-analysis-checklist");
     const questionsEl = document.getElementById("fbco-analysis-questions");
-    const priceEl = document.getElementById("fbco-analysis-price");
-    const dealBreakersEl = document.getElementById("fbco-analysis-dealbreakers");
-    const risksEl = document.getElementById("fbco-analysis-risks");
+    const concernsEl = document.getElementById("fbco-analysis-concerns");
     const scoreBadgeEl = document.getElementById("fbco-score-badge");
     const confidenceBadgeEl = document.getElementById("fbco-confidence-badge");
     const verdictBadgeEl = document.getElementById("fbco-verdict-badge");
+    const verdictPillEl = document.getElementById("fbco-verdict-pill");
+    const valueLineEl = document.getElementById("fbco-value-line");
     const tagsEl = document.getElementById("fbco-analysis-tags");
-    const marketEl = document.getElementById("fbco-analysis-market");
     const maintenanceEl = document.getElementById("fbco-analysis-maintenance");
     const finalVerdictEl = document.getElementById("fbco-final-verdict");
     const yearRepEl = document.getElementById("fbco-year-rep");
@@ -1200,10 +1227,12 @@
     const skillEl = document.getElementById("fbco-skill");
     const notesEl = document.getElementById("fbco-notes");
     const notesBlock = document.getElementById("fbco-notes-block");
-    const repBlock = document.getElementById("fbco-kv-rep");
+    const repBlock = document.getElementById("fbco-rep-block");
     const lifespanBlock = document.getElementById("fbco-kv-lifespan");
     const dailyBlock = document.getElementById("fbco-kv-daily");
     const skillBlock = document.getElementById("fbco-kv-skill");
+    const maintBlock = document.getElementById("fbco-maint-block");
+    const wearBlock = document.getElementById("fbco-wear-block");
     const subscriptionFlagEl = document.getElementById("fbco-subscription-flag");
     const authMessageEl = document.getElementById("fbco-auth-message");
     const authEmailEl = document.getElementById("fbco-auth-email");
@@ -1215,16 +1244,12 @@
     const authClearSubBtn = document.getElementById("fbco-auth-clear-sub");
     const authLogoutBtn = document.getElementById("fbco-auth-logout");
 
-    const accOverview = document.getElementById("fbco-acc-overview");
-    const accUpsides = document.getElementById("fbco-acc-upsides");
-    const accMaintenance = document.getElementById("fbco-acc-maintenance");
-    const accCommon = document.getElementById("fbco-acc-common");
-    const accWear = document.getElementById("fbco-acc-wear");
-    const accRisk = document.getElementById("fbco-acc-risk");
-    const accDeal = document.getElementById("fbco-acc-deal");
+    const accConcerns = document.getElementById("fbco-acc-concerns");
+    const accKnown = document.getElementById("fbco-acc-known");
+    const accOutlook = document.getElementById("fbco-acc-outlook");
+    const accGood = document.getElementById("fbco-acc-good");
     const accInspection = document.getElementById("fbco-acc-inspection");
     const accQuestions = document.getElementById("fbco-acc-questions");
-    const accMarket = document.getElementById("fbco-acc-market");
     const accDetails = document.getElementById("fbco-acc-details");
 
     setText(parsedValEl, vehicleData.normalized, null, { loading: busy, preserveOnLoading: !clearVehicle });
@@ -1386,27 +1411,42 @@
       metaTitleEl.classList.toggle("fbco-muted", t.startsWith("Unknown"));
     }
 
+    // Top concerns: deal breakers first, then risk flags, deduped.
+    const concernSeen = new Set();
+    const concerns = [...(data?.deal_breakers || []), ...(data?.risk_flags || [])]
+      .map((x) => sanitizeListText(typeof x === "string" ? x : x ? JSON.stringify(x) : ""))
+      .filter(Boolean)
+      .filter((t) => {
+        const k = t.toLowerCase();
+        if (concernSeen.has(k)) return false;
+        concernSeen.add(k);
+        return true;
+      })
+      .slice(0, 8);
+    renderList(concernsEl, concerns, null, { wrapper: accConcerns });
+
     renderList(maintenanceEl, data?.expected_maintenance_near_term, stringifyMaintenance, {
-      wrapper: accMaintenance
+      wrapper: maintBlock
     });
-    renderList(upsidesEl, data?.upsides, null, { wrapper: accUpsides });
-    renderList(issuesEl, data?.common_issues, stringifyIssue, { wrapper: accCommon });
-    renderList(wearEl, data?.wear_items, stringifyMaintenance, { wrapper: accWear });
+    renderList(upsidesEl, data?.upsides, null, { wrapper: accGood });
+    renderList(issuesEl, data?.common_issues, stringifyIssue, {});
+    renderList(wearEl, data?.wear_items, stringifyMaintenance, { wrapper: wearBlock });
     renderList(checklistEl, data?.inspection_checklist, null, { wrapper: accInspection });
     const mergedQuestions = (data?.buyer_questions || []).slice(0, 8)
       .map((q) => sanitizeListText(q))
       .filter(Boolean);
     renderList(questionsEl, mergedQuestions, null, { clickable: true, wrapper: accQuestions });
-    renderList(dealBreakersEl, data?.deal_breakers, null, { wrapper: accDeal });
-    renderList(risksEl, data?.risk_flags, null, { wrapper: accRisk });
     const REDUNDANT_TAGS = /^(used car|used vehicle|pre-?owned|automobile|auto|car|vehicle|reliable|good condition|great condition|clean)$/i;
     renderTags(tagsEl, (data?.tags || []).filter((t) => t && !REDUNDANT_TAGS.test(String(t).trim())));
 
+    // Fair-value line inside the summary card (replaces the market accordion).
     const marketText = isMeaningfulText(data?.market_value_estimate) ? data?.market_value_estimate : "";
     const priceText = isMeaningfulText(data?.price_opinion) ? data?.price_opinion : "";
-    if (marketEl) marketEl.textContent = marketText || "—";
-    if (priceEl) priceEl.textContent = priceText || "—";
-    setVisible(accMarket, Boolean(marketText || priceText) || busy);
+    if (valueLineEl) {
+      const valueText = [marketText, priceText].filter(Boolean).join(" ");
+      valueLineEl.textContent = valueText || (busy ? "Estimating fair value…" : "—");
+      setVisible(valueLineEl, Boolean(valueText) || busy);
+    }
 
     const confValue = Number.isFinite(Number(data?.confidence)) ? Number(data?.confidence) : null;
     let score = Number.isFinite(Number(data?.overall_score))
@@ -1416,6 +1456,27 @@
       : Number.isFinite(confValue)
       ? Math.round(confValue * 100)
       : null;
+
+    // Plain-language recommendation banner — the first thing a buyer reads.
+    if (verdictPillEl) {
+      if (score == null) {
+        verdictPillEl.textContent = busy ? "Analyzing listing…" : "Analysis unavailable — press Refresh";
+        verdictPillEl.dataset.tone = "muted";
+      } else if (score < 35) {
+        verdictPillEl.textContent = "High risk — most buyers should pass";
+        verdictPillEl.dataset.tone = "no";
+      } else if (score < 55) {
+        verdictPillEl.textContent = "Risky — negotiate hard or walk away";
+        verdictPillEl.dataset.tone = "risky";
+      } else if (score < 75) {
+        verdictPillEl.textContent = "Fair deal — verify before you buy";
+        verdictPillEl.dataset.tone = "fair";
+      } else {
+        verdictPillEl.textContent = "Good deal candidate — still inspect";
+        verdictPillEl.dataset.tone = "good";
+      }
+    }
+
     if (scoreBadgeEl) {
       if (score == null) {
         setBadgeWithInfo(scoreBadgeEl, busy ? "…" : "--", "", "fbco-badge fbco-badge-muted");
@@ -1472,8 +1533,16 @@
       );
     }
 
-    const overviewVisible = busy || repShown || lifespanShown || dailyShown || skillShown || notesShown;
-    setVisible(accOverview, overviewVisible);
+    setVisible(accKnown, busy || repShown || (data?.common_issues || []).length > 0);
+    const outlookVisible =
+      busy ||
+      lifespanShown ||
+      dailyShown ||
+      skillShown ||
+      notesShown ||
+      (data?.expected_maintenance_near_term || []).length > 0 ||
+      (data?.wear_items || []).length > 0;
+    setVisible(accOutlook, outlookVisible);
     setVisible(accDetails, true);
   };
 })();

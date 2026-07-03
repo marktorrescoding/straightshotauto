@@ -18,7 +18,16 @@ const SYSTEM_PROMPT =
   ].join("\n");
 
 const CACHE_TTL_SECONDS = 60 * 60 * 24;
-const CACHE_VERSION = "v20"; // bump for fuel/mpg/nhtsa/paid_off fields now included in snapshot + evidence coverage
+const CACHE_VERSION = "v21"; // bump for salvage/major-defect scoring, emoji removal, disclosed-damage detection
+const CHAT_DAILY_LIMIT = 10;
+
+const CHAT_SYSTEM_PROMPT = [
+  "You are a practical, plain-spoken mechanic helping a first-time used-car buyer evaluate one specific listing.",
+  "Answer the buyer's question directly in under 120 words. No emojis, no markdown headers.",
+  "Ground every answer in the listing snapshot and analysis provided. Never invent facts about this specific car — if the listing doesn't say, tell the buyer to ask the seller or check during inspection.",
+  "Include realistic repair/maintenance cost ranges when relevant.",
+  "If the buyer is about to make a clearly bad financial decision, say so plainly."
+].join("\n");
 const FREE_DAILY_LIMIT = 3;
 const RATE_MIN_INTERVAL_MS = 0;
 const RATE_WINDOW_MS = 60 * 60 * 1000;
@@ -283,12 +292,38 @@ function stripLeadingDecorators(text) {
 
 function verdictFromScore(score) {
   if (!Number.isFinite(score)) return "unknown";
-  if (score <= 14) return "❌ No";
-  if (score <= 34) return "⚠️ Risky";
-  if (score <= 54) return "⚖️ Fair";
-  if (score <= 71) return "👍 Good";
-  if (score <= 87) return "💎 Great";
-  return "🚀 Steal";
+  if (score <= 14) return "No";
+  if (score <= 34) return "Risky";
+  if (score <= 54) return "Fair";
+  if (score <= 71) return "Good";
+  if (score <= 87) return "Great";
+  return "Steal";
+}
+
+// Seller-disclosed major defects ("transmission is damaged", "blown head
+// gasket", ...). These must dominate the verdict for a casual buyer — a car
+// with a dead transmission is not a "conditional buy" at asking price.
+function detectMajorDisclosedDefects(snapshot) {
+  const t = sourceBlob(snapshot);
+  if (!t) return [];
+  const defects = [];
+  if (
+    /(transmission|gearbox|\btrans\b)[^.!\n]{0,40}(damaged|slipp|blown|shot|going out|failing|bad|broken|needs?\s+(to be\s+)?(replaced|rebuilt|repair))/i.test(t) ||
+    /needs?\s+(a\s+)?(new\s+)?transmission/i.test(t)
+  ) {
+    defects.push("transmission");
+  }
+  if (
+    /(engine|motor)[^.!\n]{0,40}(damaged|blown|knock|seized|failing|broken|needs?\s+(to be\s+)?(replaced|rebuilt|repair))/i.test(t) ||
+    /needs?\s+(a\s+)?(new\s+)?engine/i.test(t) ||
+    /blown\s+head\s*gasket/i.test(t)
+  ) {
+    defects.push("engine");
+  }
+  if (/(frame|undercarriage)[^.!\n]{0,40}(rust(ed)?|rot(ted)?|damage|perforat)/i.test(t)) {
+    defects.push("frame");
+  }
+  return defects;
 }
 
 function letterGradeFromScore(score) {
@@ -564,12 +599,17 @@ function computeHeuristicDecisionScore(snapshot, out) {
 
   if (title === "unknown") score -= 6;
   if (title === "no_title") score -= 35;
+  if (title === "salvage") score -= 25;
   if (title === "lien") score -= 8;
   if (title === "rebuilt") score -= 18;
   if (title === "clean") score += 2;
   if (!drive) score -= 2;
   if (hasRecords) score += 4;
   if (modified) score -= 3;
+
+  const defects = detectMajorDisclosedDefects(snapshot);
+  if (defects.includes("transmission") || defects.includes("engine")) score -= 30;
+  if (defects.includes("frame")) score -= 15;
 
   return clamp(Math.round(score), 0, 100);
 }
@@ -1794,9 +1834,13 @@ function normalizeVerdictTone(out, snapshot) {
   const hasDrive = hasKnownValue(inferredDrivetrain(snapshot));
   const miles = asNumber(snapshot?.mileage_miles, null);
   const reasons = [];
+  const defects = detectMajorDisclosedDefects(snapshot);
+  if (defects.includes("engine")) reasons.push("seller-disclosed engine damage");
+  if (defects.includes("transmission")) reasons.push("seller-disclosed transmission damage");
   if (Number.isFinite(miles) && miles >= 200000) reasons.push(`very high mileage (${Math.round(miles).toLocaleString("en-US")} mi)`);
   else if (Number.isFinite(miles) && miles >= 150000) reasons.push(`high mileage (${Math.round(miles).toLocaleString("en-US")} mi)`);
   if (title === "no_title") reasons.push("no title is disclosed");
+  else if (title === "salvage") reasons.push("salvage title risk");
   else if (title === "rebuilt") reasons.push("rebuilt title risk");
   else if (title === "lien") reasons.push("lien/title transfer risk");
 
@@ -1840,9 +1884,15 @@ function buildDeterministicSummary(out, snapshot) {
   const subject = [year, make, model].filter(Boolean).join(" ").trim() || "This vehicle";
   const priceText = ask ? formatUsdWhole(ask) : "price not listed";
   const milesText = miles ? `${Math.round(miles).toLocaleString("en-US")} miles` : "mileage not listed";
-  const facts = `${subject} is listed at ${priceText} with ${milesText}${
-    title === "clean" ? " and seller-claimed clean title" : ""
-  }.`;
+  const titleNote =
+    title === "clean"
+      ? " and seller-claimed clean title"
+      : title === "salvage"
+      ? " and a salvage title"
+      : title === "rebuilt"
+      ? " and a rebuilt title"
+      : "";
+  const facts = `${subject} is listed at ${priceText} with ${milesText}${titleNote}.`;
 
   let priceLine = "";
   if (!ask || !miles) {
@@ -1865,6 +1915,13 @@ function buildDeterministicSummary(out, snapshot) {
   }
 
   const expectations = [];
+  const summaryDefects = detectMajorDisclosedDefects(snapshot);
+  if (summaryDefects.includes("engine")) {
+    expectations.push("seller discloses engine damage — a major repair; price the car accordingly");
+  }
+  if (summaryDefects.includes("transmission")) {
+    expectations.push("seller discloses transmission damage — budget $2,000–$4,500 for repair and price accordingly");
+  }
   if (miles != null && miles >= 150000) expectations.push("expect higher wear-item and drivetrain maintenance costs");
   else if (miles != null && miles <= 60000) expectations.push("mileage is low for age");
   if (!hasKnownValue(snapshot?.vin)) expectations.push("request VIN for a history check before committing");
@@ -1936,8 +1993,14 @@ function computeValuationBand(snapshot, out) {
 
   if (titleStatus === "unknown") discount += 0.05;
   else if (titleStatus === "lien") discount += 0.09;
+  else if (titleStatus === "salvage") discount += 0.22;
   else if (titleStatus === "rebuilt") discount += 0.2;
   else if (titleStatus === "no_title") discount += 0.35;
+
+  const majorDefects = detectMajorDisclosedDefects(snapshot);
+  if (majorDefects.includes("transmission")) discount += 0.2;
+  if (majorDefects.includes("engine")) discount += 0.25;
+  if (majorDefects.includes("frame")) discount += 0.12;
 
   if (!drive) discount += 0.01;
   if (!trans) discount += 0.005;
@@ -1948,7 +2011,12 @@ function computeValuationBand(snapshot, out) {
 
   discount += retentionAdj;
 
-  const discountCap = titleStatus === "no_title" ? 0.6 : 0.28;
+  const discountCap =
+    titleStatus === "no_title" || majorDefects.length
+      ? 0.6
+      : titleStatus === "salvage" || titleStatus === "rebuilt"
+      ? 0.45
+      : 0.28;
   discount = clamp(discount, -0.08, discountCap);
 
   const fairMid = Math.max(500, Math.round(ask * (1 - discount)));
@@ -2073,6 +2141,8 @@ function detectSellerDisclosedNeeds(out, snapshot) {
   const needs = [
     { re: /needs?\s+(a\s+)?(new\s+)?alternator/i,         flag: "Seller reports alternator needs replacement",                   item: "Alternator replacement (seller-disclosed)", cost: "$80–$200 DIY / $250–$500 shop" },
     { re: /needs?\s+(a\s+)?(new\s+)?transmission/i,        flag: "Seller reports transmission needs replacement",                 item: "Transmission replacement (seller-disclosed)", cost: "$500–$1,500 DIY / $1,500–$4,000 shop" },
+    { re: /(transmission|gearbox)[^.!\n]{0,40}(damaged|slipp\w*|blown|shot|going out|failing|broken)/i, flag: "Seller reports transmission damage — major repair before this is a usable vehicle", item: "Transmission repair/replacement (seller-disclosed)", cost: "$1,000–$2,000 DIY / $2,000–$4,500 shop" },
+    { re: /(engine|motor)[^.!\n]{0,40}(damaged|blown|knock\w*|seized|failing|broken)/i, flag: "Seller reports engine damage — major repair before this is a usable vehicle", item: "Engine repair/replacement (seller-disclosed)", cost: "$1,000–$3,000 DIY / $3,000–$8,000 shop" },
     { re: /needs?\s+(a\s+)?(new\s+)?engine/i,              flag: "Seller reports engine needs replacement",                       item: "Engine replacement (seller-disclosed)", cost: "$1,000–$3,000 DIY / $3,000–$8,000 shop" },
     { re: /needs?\s+(a\s+)?(new\s+)?timing\s+(belt|chain)/i, flag: "Seller reports timing belt/chain needs service",              item: "Timing belt/chain (seller-disclosed)", cost: "$200–$400 DIY / $500–$1,200 shop" },
     { re: /needs?\s+(a\s+)?(new\s+)?water\s+pump/i,        flag: "Seller reports water pump needs replacement",                   item: "Water pump (seller-disclosed)", cost: "$80–$150 DIY / $200–$500 shop" },
@@ -2244,6 +2314,11 @@ function coerceAndFill(raw, snapshot) {
   const heuristicScore = computeHeuristicDecisionScore(snapshot, out);
   let score = heuristicScore;
   if (deriveTitleStatus(snapshot) === "no_title") score = Math.min(score, 24);
+  // A disclosed dead/dying powertrain is never better than "high risk".
+  const majorDefects = detectMajorDisclosedDefects(snapshot);
+  if (majorDefects.includes("transmission") || majorDefects.includes("engine")) {
+    score = Math.min(score, 30);
+  }
   score = clamp(Math.round(score), 0, 100);
   out.risk_score_base = score;
   out.overall_score = score;
@@ -2758,6 +2833,144 @@ export default {
           })
         });
         return jsonResponse({ ok: true }, origin, 200);
+      }
+
+      if (url.pathname === "/chat") {
+        if (request.method !== "POST") {
+          return jsonResponse({ error: "Method not allowed" }, origin, 405);
+        }
+        let body = null;
+        try {
+          body = await request.json();
+        } catch {
+          return jsonResponse({ error: "Invalid JSON body" }, origin, 400);
+        }
+        const question = (body?.question || "").toString().trim().slice(0, 600);
+        if (!question) return jsonResponse({ error: "Question required" }, origin, 400);
+        const history = Array.isArray(body?.messages) ? body.messages.slice(-8) : [];
+        const vehicle = body?.vehicle || {};
+        const analysis = body?.analysis || {};
+
+        const token = getAuthToken(request);
+        const user = await fetchSupabaseUser(token, env);
+        const sub = user ? await resolveSubscriptionRecord(user, env) : null;
+        const validated = isSubscriptionActive(sub);
+
+        if (!validated) {
+          const cache = caches.default;
+          const ip = getClientIp(request);
+          const ua = (request.headers.get("User-Agent") || "").slice(0, 180);
+          const bucketHash = await hashString(`chat|${utcDayStampNow()}|${ip}|${ua}`);
+          const usageReq = new Request(`https://quota.car-bot.local/chat/${bucketHash}`);
+          const existing = await cache.match(usageReq);
+          const used = existing ? Number(await existing.text()) || 0 : 0;
+          if (used >= CHAT_DAILY_LIMIT) {
+            return jsonResponse(
+              {
+                error: `Daily limit of ${CHAT_DAILY_LIMIT} mechanic questions reached. Subscribe for unlimited questions.`,
+                code: "chat_limit_reached"
+              },
+              origin,
+              402
+            );
+          }
+          await cache.put(
+            usageReq,
+            new Response(String(used + 1), {
+              headers: { "Cache-Control": "public, max-age=172800" }
+            })
+          );
+        }
+
+        if (!env.OPENAI_API_KEY) {
+          return jsonResponse({ error: "Server missing OPENAI_API_KEY" }, origin, 500);
+        }
+
+        // Flatten prior turns into a transcript — simpler and more robust than
+        // mapping roles onto the Responses API message format.
+        const transcript = history
+          .map((m) => {
+            const who = m?.role === "assistant" ? "Mechanic" : "Buyer";
+            return `${who}: ${(m?.content || "").toString().slice(0, 500)}`;
+          })
+          .filter((line) => line.length > "Mechanic: ".length)
+          .join("\n");
+
+        const chatPrompt = [
+          "Listing snapshot:",
+          JSON.stringify(
+            {
+              year: vehicle.year ?? null,
+              make: vehicle.make ?? null,
+              model: vehicle.model ?? null,
+              trim: vehicle.trim ?? null,
+              price_usd: vehicle.price_usd ?? null,
+              mileage_miles: vehicle.mileage_miles ?? null,
+              transmission: vehicle.transmission ?? null,
+              drivetrain: vehicle.drivetrain ?? null,
+              engine: vehicle.engine ?? null,
+              fuel_type: vehicle.fuel_type ?? null,
+              title_status: vehicle.title_status ?? null,
+              seller_description: (vehicle.seller_description || "").toString().slice(0, 1500) || null
+            },
+            null,
+            2
+          ),
+          "",
+          "Analysis highlights:",
+          JSON.stringify(
+            {
+              summary: (analysis.summary || "").toString().slice(0, 600) || null,
+              final_verdict: (analysis.final_verdict || "").toString().slice(0, 400) || null,
+              overall_score: analysis.overall_score ?? null,
+              deal_grade: analysis.deal_grade ?? null,
+              risk_flags: asArray(analysis.risk_flags).slice(0, 8),
+              deal_breakers: asArray(analysis.deal_breakers).slice(0, 6)
+            },
+            null,
+            2
+          ),
+          "",
+          ...(transcript ? ["Conversation so far:", transcript, ""] : []),
+          `Buyer: ${question}`
+        ].join("\n");
+
+        const chatRes = await fetch("https://api.openai.com/v1/responses", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${env.OPENAI_API_KEY}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            model: "gpt-4o-mini",
+            temperature: 0.3,
+            max_output_tokens: 400,
+            input: [
+              { role: "system", content: [{ type: "input_text", text: CHAT_SYSTEM_PROMPT }] },
+              { role: "user", content: [{ type: "input_text", text: chatPrompt }] }
+            ]
+          })
+        });
+        const chatRaw = await chatRes.text();
+        if (!chatRes.ok) {
+          return jsonResponse({ error: "Mechanic unavailable right now", status: chatRes.status }, origin, 502);
+        }
+        let chatData = null;
+        try {
+          chatData = JSON.parse(chatRaw);
+        } catch {
+          return jsonResponse({ error: "Mechanic unavailable right now" }, origin, 502);
+        }
+        const chatContent = chatData?.output?.[0]?.content || [];
+        const reply =
+          chatData?.output_text ||
+          chatContent.find((c) => c?.type === "output_text")?.text ||
+          chatContent[0]?.text ||
+          "";
+        if (!reply) return jsonResponse({ error: "Mechanic unavailable right now" }, origin, 502);
+        const res = jsonResponse({ reply: String(reply).trim() }, origin, 200);
+        res.headers.set("Cache-Control", "no-store");
+        return res;
       }
 
       if (url.pathname !== "/analyze") {
