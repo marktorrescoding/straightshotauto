@@ -620,68 +620,87 @@ function getAuthToken(request) {
   return null;
 }
 
+// All Supabase helpers tolerate the project being unreachable (e.g. paused
+// free-tier project): they return null instead of throwing, so anonymous
+// analysis keeps working and auth degrades gracefully.
 async function fetchSupabaseUser(token, env) {
   if (!token) return null;
   if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) return null;
-  const res = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      apikey: env.SUPABASE_ANON_KEY
-    }
-  });
-  if (!res.ok) return null;
-  return res.json().catch(() => null);
+  try {
+    const res = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        apikey: env.SUPABASE_ANON_KEY
+      }
+    });
+    if (!res.ok) return null;
+    return res.json().catch(() => null);
+  } catch {
+    return null;
+  }
 }
 
 async function supabaseAdminRequest(path, env, options = {}) {
   if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) return null;
-  const res = await fetch(`${env.SUPABASE_URL}${path}`, {
-    ...options,
-    headers: {
-      apikey: env.SUPABASE_SERVICE_ROLE_KEY,
-      Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
-      "Content-Type": "application/json",
-      ...(options.headers || {})
-    }
-  });
-  if (!res.ok) return null;
-  if (res.status === 204) return {};
-  return res.json().catch(() => null);
+  try {
+    const res = await fetch(`${env.SUPABASE_URL}${path}`, {
+      ...options,
+      headers: {
+        apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+        "Content-Type": "application/json",
+        ...(options.headers || {})
+      }
+    });
+    if (!res.ok) return null;
+    if (res.status === 204) return {};
+    return res.json().catch(() => null);
+  } catch {
+    return null;
+  }
 }
 
 async function fetchSupabaseUserByEmail(email, env) {
   if (!email) return null;
   if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) return null;
-  const res = await fetch(
-    `${env.SUPABASE_URL}/auth/v1/admin/users?email=${encodeURIComponent(email)}`,
-    {
-      headers: {
-        apikey: env.SUPABASE_SERVICE_ROLE_KEY,
-        Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`
+  try {
+    const res = await fetch(
+      `${env.SUPABASE_URL}/auth/v1/admin/users?email=${encodeURIComponent(email)}`,
+      {
+        headers: {
+          apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`
+        }
       }
-    }
-  );
-  if (!res.ok) return null;
-  const data = await res.json();
-  if (Array.isArray(data?.users)) return data.users[0] || null;
-  if (Array.isArray(data)) return data[0] || null;
-  return data?.user || null;
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (Array.isArray(data?.users)) return data.users[0] || null;
+    if (Array.isArray(data)) return data[0] || null;
+    return data?.user || null;
+  } catch {
+    return null;
+  }
 }
 
 async function createSupabaseUserForEmail(email, env) {
   if (!email) return null;
   if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) return null;
-  const res = await fetch(`${env.SUPABASE_URL}/auth/v1/admin/users`, {
-    method: "POST",
-    headers: {
-      apikey: env.SUPABASE_SERVICE_ROLE_KEY,
-      Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ email, email_confirm: true })
-  });
-  if (!res.ok) return null;
-  return res.json();
+  try {
+    const res = await fetch(`${env.SUPABASE_URL}/auth/v1/admin/users`, {
+      method: "POST",
+      headers: {
+        apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ email, email_confirm: true })
+    });
+    if (!res.ok) return null;
+    return res.json();
+  } catch {
+    return null;
+  }
 }
 
 async function findOrCreateSupabaseUserByEmail(email, env) {
@@ -2589,6 +2608,54 @@ export default {
         return htmlResponse(html, origin, 200);
       }
 
+      if (url.pathname === "/auth/reset") {
+        // Landing page for Supabase password-recovery links. The recovery
+        // token arrives in the URL hash; this page lets the user set a new
+        // password via PUT /auth/v1/user with that token.
+        const supaUrl = (env.SUPABASE_URL || "").replace(/"/g, "");
+        const supaKey = (env.SUPABASE_ANON_KEY || "").replace(/"/g, "");
+        const html =
+          "<!doctype html>" +
+          "<html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>StraightShotAuto — Reset password</title></head>" +
+          "<body style=\"font-family:system-ui, -apple-system, sans-serif; padding:24px; background:#f7f6f2;\">" +
+          "<div style=\"max-width:460px; margin:8vh auto; background:#fff; border:1px solid #e6e2d8; padding:24px; border-radius:12px;\">" +
+          "<h2 style=\"margin:0 0 8px; font-size:20px;\">Set a new password</h2>" +
+          "<form id=\"reset-form\">" +
+          "<label style=\"font-size:13px;\">New password<br><input type=\"password\" id=\"password\" required minlength=\"6\" style=\"width:100%; padding:9px; margin:6px 0 12px; box-sizing:border-box;\"></label>" +
+          "<label style=\"font-size:13px;\">Confirm new password<br><input type=\"password\" id=\"password2\" required minlength=\"6\" style=\"width:100%; padding:9px; margin:6px 0 12px; box-sizing:border-box;\"></label>" +
+          "<button type=\"submit\" style=\"padding:10px 16px; border-radius:8px; border:0; background:#111827; color:#fff; cursor:pointer;\">Update password</button>" +
+          "</form>" +
+          "<p id=\"msg\" style=\"margin-top:14px; font-size:13px;\"></p>" +
+          "</div>" +
+          "<script>" +
+          "const SUPABASE_URL=" + JSON.stringify(supaUrl) + ";" +
+          "const SUPABASE_KEY=" + JSON.stringify(supaKey) + ";" +
+          "const params=new URLSearchParams(location.hash.replace(/^#/,''));" +
+          "const token=params.get('access_token');" +
+          "const errDesc=params.get('error_description');" +
+          "const msg=document.getElementById('msg');" +
+          "const form=document.getElementById('reset-form');" +
+          "if(errDesc){form.style.display='none';msg.textContent='This reset link is invalid or expired ('+errDesc+'). Request a new one from the extension.';}" +
+          "else if(!token){form.style.display='none';msg.textContent='Missing reset token. Open this page from the link in your password reset email.';}" +
+          "form.addEventListener('submit', async (e)=>{" +
+          "e.preventDefault();" +
+          "const p1=document.getElementById('password').value;" +
+          "const p2=document.getElementById('password2').value;" +
+          "if(p1!==p2){msg.textContent='Passwords do not match.';return;}" +
+          "msg.textContent='Updating password…';" +
+          "try{" +
+          "const res=await fetch(SUPABASE_URL+'/auth/v1/user',{method:'PUT',headers:{apikey:SUPABASE_KEY,Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({password:p1})});" +
+          "const data=await res.json().catch(()=>({}));" +
+          "if(!res.ok){msg.textContent=data.msg||data.error_description||data.message||'Unable to update password — the link may have expired.';return;}" +
+          "form.style.display='none';" +
+          "msg.textContent='Password updated. Return to Facebook Marketplace and log in with your new password.';" +
+          "}catch(err){msg.textContent='Network error — try again.';}" +
+          "});" +
+          "</script>" +
+          "</body></html>";
+        return htmlResponse(html, origin, 200);
+      }
+
       if (url.pathname === "/auth/signup") {
         if (request.method === "GET") {
           const html =
@@ -2643,14 +2710,19 @@ export default {
         if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) {
           return jsonResponse({ error: "Auth not configured" }, origin, 500);
         }
-        const res = await fetch(`${env.SUPABASE_URL}/auth/v1/signup`, {
-          method: "POST",
-          headers: {
-            apikey: env.SUPABASE_ANON_KEY,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({ email, password })
-        });
+        let res;
+        try {
+          res = await fetch(`${env.SUPABASE_URL}/auth/v1/signup`, {
+            method: "POST",
+            headers: {
+              apikey: env.SUPABASE_ANON_KEY,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ email, password })
+          });
+        } catch {
+          return jsonResponse({ error: "Auth service unreachable — try again later" }, origin, 502);
+        }
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
           return jsonResponse({ error: data?.msg || data?.error_description || "Signup failed" }, origin, 400);

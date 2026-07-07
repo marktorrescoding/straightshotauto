@@ -9,6 +9,7 @@
   const BILLING_CHECKOUT_URL = "https://car-bot.car-bot.workers.dev/billing/checkout";
   const BILLING_PORTAL_URL = "https://car-bot.car-bot.workers.dev/billing/portal";
   const AUTH_SIGNUP_URL = "https://car-bot.car-bot.workers.dev/auth/signup";
+  const AUTH_RESET_URL = "https://car-bot.car-bot.workers.dev/auth/reset";
   const SUPABASE_URL = "https://uluvqqypgdpsxzutojdd.supabase.co";
   const SUPABASE_ANON_KEY =
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVsdXZxcXlwZ2Rwc3h6dXRvamRkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAwNzY1MDgsImV4cCI6MjA4NTY1MjUwOH0.m49_Y868P0Vpw5vT3SuDDEXbsSN3VT80CMhPWP1HCH8";
@@ -333,14 +334,19 @@
     }
     if (!email || !password) throw new Error("Email and password required");
     window.FBCO_storage.set(AUTH_EMAIL_KEY, email);
-    const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
-      method: "POST",
-      headers: {
-        apikey: SUPABASE_ANON_KEY,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ email, password })
-    });
+    let res;
+    try {
+      res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+        method: "POST",
+        headers: {
+          apikey: SUPABASE_ANON_KEY,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ email, password })
+      });
+    } catch {
+      throw new Error("Auth service unreachable — try again later");
+    }
     if (!res.ok) throw new Error("Invalid email or password");
     const data = await res.json();
     const session = normalizeAuthSession(data);
@@ -923,14 +929,23 @@
       throw new Error("Auth not configured");
     }
     if (!email) throw new Error("Email required");
-    const res = await fetch(`${SUPABASE_URL}/auth/v1/recover`, {
-      method: "POST",
-      headers: {
-        apikey: SUPABASE_ANON_KEY,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ email })
-    });
+    let res;
+    try {
+      // redirect_to sends the recovery link to the worker's set-new-password
+      // page (must be in the Supabase Auth redirect allow-list).
+      const recoverUrl = `${SUPABASE_URL}/auth/v1/recover?redirect_to=${encodeURIComponent(AUTH_RESET_URL)}`;
+      res = await fetch(recoverUrl, {
+        method: "POST",
+        headers: {
+          apikey: SUPABASE_ANON_KEY,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ email })
+      });
+    } catch {
+      throw new Error("Auth service unreachable — try again later");
+    }
+    if (res.status === 429) throw new Error("Too many reset emails — wait a few minutes and try again");
     if (!res.ok) throw new Error("Unable to send reset email");
   }
 
@@ -940,7 +955,7 @@
     scheduleUpdate();
     try {
       await resetPassword(email);
-      state.authMessage = "Password reset email sent. Check your inbox.";
+      state.authMessage = "Password reset email sent. Check your inbox (and spam folder).";
     } catch (err) {
       state.authMessage = err?.message || "Unable to send reset email.";
     }
